@@ -1,0 +1,667 @@
+"""Verwerkt de bronbestanden in bron/ tot de site in site/.
+Controleert de data eerst; bij een verdachte uitkomst stopt de build en blijft de vorige versie online."""
+import csv, datetime as dt, html, json, os, pathlib, re, sys, unicodedata
+from collections import defaultdict
+
+BRON = pathlib.Path("bron")
+SITE = pathlib.Path("site")
+BASIS = os.environ.get("BASIS", "https://infectieziekten-nl.pages.dev").rstrip("/")
+NAAM = "Infectieziekten in Nederland"
+VANDAAG = dt.date.today()
+MAAND = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"]
+
+
+def fout(msg):
+    print("DATACHECK MISLUKT:", msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def num(v):
+    try:
+        return float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def maandag(yw):  # "2026-W46" -> date
+    y, w = yw.split("-W")
+    return dt.date.fromisocalendar(int(y), int(w), 1)
+
+
+def datum_nl(d):
+    return f"{d.day} {MAAND[d.month - 1]} {d.year}"
+
+
+def wk_nl(d):
+    y, w, _ = d.isocalendar()
+    return f"week {w} van {y}"
+
+
+def f1(v):
+    return "–" if v is None else f"{v:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def f0(v):
+    return "–" if v is None else f"{v:,.0f}".replace(",", ".")
+
+
+def in_zin(t):
+    """ziektenaam midden in een zin: 'Mazelen' -> 'mazelen', maar TBC, Q-koorts en Creutzfeldt-Jakob blijven"""
+    return " ".join(w[0].lower() + w[1:] if len(w) > 1 and w[0].isupper() and w[1].islower() and not re.search(r"-[A-Z]", w) else w for w in t.split(" "))
+
+
+def slug(t):
+    t = unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "-", t).strip("-")
+
+
+# ---------------------------------------------------------------- ERVISS (ECDC)
+def erviss(bestand, filter_fn, sleutel_fn):
+    uit = defaultdict(dict)
+    with open(BRON / bestand, newline="") as f:
+        for r in csv.DictReader(f):
+            if r["countryname"] != "Netherlands" or not filter_fn(r):
+                continue
+            v = num(r["value"])
+            if v is not None:
+                uit[maandag(r["yearweek"])][sleutel_fn(r)] = v
+    return uit
+
+
+sentinel = erviss("sentinel.csv", lambda r: r["age"] == "total" and r["pathogen"] == r["pathogentype"] and r["indicator"] in ("positivity", "tests"),
+                  lambda r: (r["pathogen"], r["indicator"]))
+lab = erviss("lab.csv", lambda r: r["age"] == "total" and r["indicator"] == "detections", lambda r: (r["pathogen"], r["pathogentype"]))
+huisarts = erviss("huisarts.csv", lambda r: True, lambda r: (r["indicator"][:3], r["age"]))
+
+
+def lab_totaal(d, p):
+    if (p, p) in d:
+        return d[(p, p)]
+    deel = [v for (pp, t), v in d.items() if pp == p]
+    return sum(deel) if deel else None
+
+
+# ---------------------------------------------------------------- RIVM
+def rivm(bestand):
+    with open(BRON / bestand, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f, delimiter=";"))
+
+
+radar = defaultdict(list)
+for r in rivm("radar_ari.csv"):
+    v = num(r["Perc_ARI_symptoms"])
+    if v is not None:
+        d = dt.date.fromisoformat(r["Date_of_statistics"])
+        radar[d - dt.timedelta(days=d.weekday())].append(v)
+radar = {d: sum(v) / len(v) for d, v in radar.items() if len(v) == 7}
+
+radar_covid = {}
+for r in rivm("radar_covid.csv"):
+    v = num(r["Perc_covid_test_positive"])
+    if v is not None:
+        radar_covid[dt.date.fromisoformat(r["Date_of_statistics"])] = v
+
+riool = {}  # dagwaarden zoals het RIVM ze publiceert
+for r in rivm("riool.csv"):
+    v = num(r["RNA_flow_per_100000"])
+    if v is not None:
+        riool[dt.date.fromisoformat(r["Date_measurement"])] = v / 1e12
+
+# meldingsplichtige ziekten (tabel op rivm.nl)
+VOETNOOT = {"1": "Alleen meldingsplichtig in Caribisch Nederland.", "2": "Meldingsplichtig sinds 1 juli 2019.",
+            "3": "Meldingsplichtig bij kinderen geboren vanaf 2006; sinds 1 april 2021 ook bij 60-plussers.",
+            "4": "Meldingsplichtig van 28 januari 2020 tot 1 juli 2023.", "5": "Meldingsplichtig sinds 22 mei 2022.",
+            "6": "Moeder en kind tellen samen als één infectie.", "7": "Meldingsplichtig sinds 1 maart 2025; 2023 en 2024 zijn vrijwillige meldingen."}
+SUP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
+RIVM_PAGINA = {
+    "COVID-19": "https://www.rivm.nl/coronavirus-covid-19", "MERS-CoV": "https://www.rivm.nl/mers", "Pokken": "https://www.rivm.nl/pokken",
+    "Polio": "https://www.rivm.nl/polio", "Severe Acute Respiratory Syndrome": "https://www.rivm.nl/sars", "Virale hemorragische koorts": "https://www.rivm.nl/ebola",
+    "Difterie": "https://www.rivm.nl/difterie", "Humane infectie met dierlijk influenzavirus": "https://www.rivm.nl/vogelgriep", "Mpox": "https://www.rivm.nl/mpox",
+    "Pest": "https://www.rivm.nl/pest", "Rabiës": "https://www.rivm.nl/rabies", "TBC": "https://www.rivm.nl/tuberculose",
+    "Buiktyfus": "https://lci.rivm.nl/richtlijnen/paratyfus", "Cholera": "https://www.rivm.nl/cholera", "Clusters van voedselinfecties": "https://www.rivm.nl/voedselinfecties",
+    "Hepatitis A": "https://www.rivm.nl/hepatitis-a", "Hepatitis B Acuut": "https://www.rivm.nl/hepatitis", "Hepatitis B Chronisch": "https://www.rivm.nl/hepatitis",
+    "Hepatitis C Acuut": "https://www.rivm.nl/hepatitis", "Hepatitis C Chronisch": "https://www.rivm.nl/hepatitis", "Kinkhoest": "https://www.rivm.nl/kinkhoest",
+    "Mazelen": "https://www.rivm.nl/mazelen", "Paratyfus A": "https://lci.rivm.nl/richtlijnen/paratyfus", "Paratyfus B": "https://lci.rivm.nl/richtlijnen/paratyfus",
+    "Paratyfus C": "https://lci.rivm.nl/richtlijnen/paratyfus", "Rubella": "https://www.rivm.nl/rodehond", "Shigellose": "https://www.rivm.nl/shigellose",
+    "STEC": "https://www.rivm.nl/stec-ehec", "Antrax": "https://www.rivm.nl/antrax", "Bof": "https://www.rivm.nl/bof", "Botulisme": "https://www.rivm.nl/botulisme",
+    "Brucellose": "https://www.rivm.nl/brucellose", "Chikungunya": "https://www.rivm.nl/chikungunya", "Dengue": "https://www.rivm.nl/dengue",
+    "Gele Koorts": "https://www.rivm.nl/gele-koorts", "Invasieve pneumokokkenziekte": "https://www.rivm.nl/pneumokokken", "Legionellose": "https://www.rivm.nl/legionella",
+    "Leptospirose": "https://www.rivm.nl/leptospirose", "Listeriose": "https://www.rivm.nl/listeriose", "Malaria": "https://www.rivm.nl/malaria",
+    "Meningokokkenziekte": "https://www.rivm.nl/meningokokken", "MRSA": "https://www.rivm.nl/mrsa", "Orthohantavirusinfectie": "https://www.rivm.nl/hantavirus",
+    "Psittacose/zoönotische chlamydia-infecties": "https://lci.rivm.nl/richtlijnen/psittacose", "Q-koorts": "https://www.rivm.nl/q-koorts",
+    "Tekenencefalitis": "https://www.rivm.nl/tekenencefalitis", "Tetanus": "https://www.rivm.nl/tetanus", "Tularemie": "https://www.rivm.nl/tularemie",
+    "Ziekte van Creutzfeldt-Jakob": "https://lci.rivm.nl/richtlijnen/creutzfeldt-jakob", "Zika": "https://www.rivm.nl/zikavirus",
+}
+OVERZICHT = "https://www.rivm.nl/meldingsplicht-infectieziekten/overzicht-meldingen"
+GROEP_UITLEG = {"A2": "groep A", "B1": "groep B1", "B2": "groep B2", "C": "groep C"}
+
+s = (BRON / "meldingen.html").read_text(encoding="utf-8")
+tabellen = re.findall(r"<table.*?</table>", s, re.S)
+if not tabellen:
+    fout("geen tabel gevonden op de RIVM-pagina met meldingen")
+selectiedatum = re.search(r"selectiedatum\s+([\d-]+)", html.unescape(re.sub(r"<[^>]+>", " ", s)))
+selectiedatum = selectiedatum.group(1) if selectiedatum else None
+ziekten, jaren, groep = [], None, None
+for tr in re.findall(r"<tr.*?</tr>", tabellen[0], re.S):
+    c = [html.unescape(re.sub(r"<[^>]+>", "", x)).strip() for x in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", tr, re.S)]
+    if not c:
+        continue
+    if c[0] == "":
+        jaren = [int(j) for j in c[1:]]
+        continue
+    if len(c) == 1:
+        groep = c[0].replace("GROEP ", "").strip()
+        continue
+    ruw = c[0].translate(SUP)
+    m = re.match(r"^(.*?[A-Za-zë\)])(\d)?$", ruw)
+    naam, noot = (m.group(1), m.group(2)) if m and not ruw.startswith("COVID") else (ruw, None)
+    if ruw.startswith("COVID-19"):
+        naam, noot = "COVID-19", ruw[8:] or None
+    kort = naam.split(" (")[0].strip()
+    waarden = dict(zip(jaren, [int(x) for x in c[1:]]))
+    ziekten.append(dict(naam=naam, kort=kort, slug=slug(kort), groep=groep, noot=VOETNOOT.get(noot or "", ""),
+                        jaren={j: waarden[j] for j in sorted(waarden)}, rivm=RIVM_PAGINA.get(kort) or RIVM_PAGINA.get(naam)))
+
+# ---------------------------------------------------------------- datacheck
+def laatste(reeks):
+    return max(reeks) if reeks else None
+
+
+for naam, reeks, max_oud in [("peilstations (ECDC)", sentinel, 35), ("laboratoria (ECDC)", lab, 35), ("huisartsen (ECDC)", huisarts, 35),
+                             ("Infectieradar klachten", radar, 21), ("Infectieradar covidtests", radar_covid, 21), ("rioolwater", riool, 21)]:
+    if len(reeks) < 100:  # rioolwater: dagen, de rest: weken
+        fout(f"{naam}: maar {len(reeks)} weken")
+    if (VANDAAG - laatste(reeks)).days > max_oud:
+        fout(f"{naam}: laatste week {laatste(reeks)} is ouder dan {max_oud} dagen")
+if len(ziekten) < 50 or not jaren or len(jaren) < 5:
+    fout(f"meldingstabel: {len(ziekten)} ziekten, jaren {jaren}")
+if len({z['slug'] for z in ziekten}) != len(ziekten):
+    fout("dubbele slugs in de meldingstabel")
+for z in ziekten:
+    if any(v < 0 for v in z["jaren"].values()):
+        fout(f"negatief aantal bij {z['naam']}")
+for d, v in sentinel.items():
+    for (p, i), x in v.items():
+        if i == "positivity" and not 0 <= x <= 100:
+            fout(f"positiviteit {p} {d}: {x}")
+
+# ---------------------------------------------------------------- reeksen
+def reeks(bron, fn):
+    return [[d.isoformat(), round(fn(v), 3)] for d, v in sorted(bron.items()) if fn(v) is not None]
+
+
+def opt(d, k):
+    return d.get(k)
+
+
+R = {
+    "griep_pos": reeks(sentinel, lambda v: v.get(("Influenza", "positivity"))),
+    "rsv_pos": reeks(sentinel, lambda v: v.get(("RSV", "positivity"))),
+    "covid_pos": reeks(sentinel, lambda v: v.get(("SARS-CoV-2", "positivity"))),
+    "monsters": reeks(sentinel, lambda v: v.get(("Influenza", "tests"))),
+    "griep_lab": reeks(lab, lambda v: lab_totaal(v, "Influenza")),
+    "rsv_lab": reeks(lab, lambda v: lab_totaal(v, "RSV")),
+    "covid_lab": reeks(lab, lambda v: lab_totaal(v, "SARS-CoV-2")),
+    "ili": reeks(huisarts, lambda v: v.get(("ILI", "total"))),
+    "ari": reeks(huisarts, lambda v: v.get(("ARI", "total"))),
+    "ari_0_4": reeks(huisarts, lambda v: v.get(("ARI", "0-4"))),
+    "ari_5_14": reeks(huisarts, lambda v: v.get(("ARI", "5-14"))),
+    "ari_15_64": reeks(huisarts, lambda v: v.get(("ARI", "15-64"))),
+    "ari_65": reeks(huisarts, lambda v: v.get(("ARI", "65+"))),
+    "radar": reeks(radar, lambda v: v),
+    "radar_covid": reeks(radar_covid, lambda v: v),
+    "riool": reeks(riool, lambda v: v),
+}
+
+
+def stand(k):
+    """laatste waarde, de waarde precies 7 dagen eerder en de datum"""
+    r = R[k]
+    a = r[-1]
+    week_eerder = (dt.date.fromisoformat(a[0]) - dt.timedelta(days=7)).isoformat()
+    b = dict(r).get(week_eerder)
+    return dict(d=dt.date.fromisoformat(a[0]), v=a[1], vorig=b)
+
+
+def seizoen_van(d):
+    y, w, _ = d.isocalendar()
+    start = y if w >= 40 else y - 1
+    return start
+
+
+def seizoen_index(d):
+    start = seizoen_van(d)
+    return (d - dt.date.fromisocalendar(start, 40, 1)).days // 7
+
+
+def zelfde_moment_vorig_seizoen(k):
+    """waarde op hetzelfde punt in het vorige seizoen"""
+    s0 = stand(k)
+    idx, sz = seizoen_index(s0["d"]), seizoen_van(s0["d"])
+    for d, v in R[k]:
+        d = dt.date.fromisoformat(d)
+        if seizoen_van(d) == sz - 1 and seizoen_index(d) == idx:
+            return v
+    return None
+
+
+def seizoenpiek(k, sz):
+    p = [(v, d) for d, v in R[k] if seizoen_van(dt.date.fromisoformat(d)) == sz]
+    return max(p) if p else None
+
+
+def verschil_pp(a, b):
+    if b is None:
+        return ""
+    d = a - b
+    if abs(d) < 0.05:
+        return "gelijk aan de week ervoor"
+    return f"{'+' if d > 0 else '−'}{f1(abs(d))} procentpunt ten opzichte van de week ervoor"
+
+
+def verschil_pct(a, b):
+    if not b:
+        return ""
+    d = (a - b) / b * 100
+    if abs(d) < 0.5:
+        return "gelijk aan de week ervoor"
+    return f"{'+' if d > 0 else '−'}{f0(abs(d))}% ten opzichte van de week ervoor"
+
+
+def richting(a, b, drempel):
+    if b is None:
+        return "flat"
+    return "up" if a - b > drempel else "down" if b - a > drempel else "flat"
+
+
+G, P, RV, C = stand("griep_pos"), stand("griep_pos"), stand("rsv_pos"), stand("covid_pos")
+RI, RA, RC, AR = stand("riool"), stand("radar"), stand("radar_covid"), stand("ari")
+huidig_sz = seizoen_van(G["d"])
+SZ_NAAM = lambda s: f"{s}/{str(s + 1)[2:]}"
+
+# ---------------------------------------------------------------- HTML
+KLEUR = {"griep": "var(--griep)", "covid": "var(--covid)", "rsv": "var(--rsv)", "ari": "var(--ari)", "grijs": "var(--grijs)"}
+pagina_lijst = []
+NAV = f"""<nav class="top"><div class="in"><a class="logo" href="/">{NAAM}</a>
+<a href="/griep/">Griep</a><a href="/covid/">Covid</a><a href="/rsv/">RSV</a><a href="/luchtwegklachten/">Luchtwegklachten</a><a href="/meldingsplichtige-ziekten/">Meldingsplichtige ziekten</a><a href="/over/">Over</a></div></nav>"""
+STAND = max(G["d"], RA["d"])
+
+
+def kop(titel, beschrijving, pad, og, ld_extra=()):
+    url = BASIS + pad
+    ld = [{"@context": "https://schema.org", "@type": "WebPage", "name": titel, "description": beschrijving, "url": url, "inLanguage": "nl",
+           "dateModified": VANDAAG.isoformat(), "isPartOf": {"@type": "WebSite", "name": NAAM, "url": BASIS + "/"}}, *ld_extra]
+    e = html.escape
+    return f"""<title>{e(titel)}</title>
+<meta name="description" content="{e(beschrijving)}">
+<link rel="canonical" href="{url}">
+<meta property="og:type" content="website"><meta property="og:locale" content="nl_NL"><meta property="og:site_name" content="{NAAM}">
+<meta property="og:title" content="{e(titel)}"><meta property="og:description" content="{e(beschrijving)}">
+<meta property="og:url" content="{url}"><meta property="og:image" content="{BASIS}/og/{og}.png">
+<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400..700;1,7..72,400..700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/stijl.css">
+<script type="application/ld+json">{json.dumps(ld, ensure_ascii=False)}</script>"""
+
+
+def schrijf(pad, titel, beschrijving, inhoud, grafieken, og="home", ld_extra=(), kruimel=None):
+    k = ""
+    if kruimel:
+        k = f'<div class="breadcrumb"><a href="/">{NAAM}</a>' + "".join(f' › <a href="{u}">{html.escape(t)}</a>' if u else f" › {html.escape(t)}" for t, u in kruimel) + "</div>"
+        crumbs = [{"@type": "ListItem", "position": 1, "name": NAAM, "item": BASIS + "/"}] + [
+            {"@type": "ListItem", "position": i + 2, "name": t, "item": BASIS + (u or pad)} for i, (t, u) in enumerate(kruimel)]
+        ld_extra = [*ld_extra, {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": crumbs}]
+    data = json.dumps(grafieken, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    t = f"""<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{kop(titel, beschrijving, pad, og, ld_extra)}
+</head>
+<body>
+{NAV}
+<main>
+{k}
+{inhoud}
+<footer>
+<p>Bronnen: <a href="https://erviss.org">ECDC ERVISS</a> (cijfers van RIVM en Nivel) · <a href="https://data.rivm.nl/">RIVM open data</a> · <a href="{OVERZICHT}">RIVM meldingsplichtige ziekten</a> · <a href="/over/">Werkwijze</a> · <a href="https://github.com/erikotn/infectieziekten-nl">Code</a></p>
+<p>Deze site geeft geen medisch advies. Bij klachten: neem contact op met je huisarts. Bijgewerkt op {datum_nl(VANDAAG)}.</p>
+<p class="hoekje">Een hoekje van <a href="https://erikmeijerink.nl">erikmeijerink.nl</a></p>
+</footer>
+</main>
+<script>window.G={data};</script>
+<script src="/grafiek.js"></script>
+</body>
+</html>"""
+    doel = SITE / pad.strip("/") / "index.html" if pad != "/" else SITE / "index.html"
+    doel.parent.mkdir(parents=True, exist_ok=True)
+    doel.write_text(t)
+    pagina_lijst.append(dict(pad=pad, og=og))
+
+
+def grafiek(gid, titel, uitleg, bron_html, legenda=(), hoog=False):
+    leg = "".join(f'<span><i class="sw" style="background:{k}"></i>{html.escape(n)}</span>' for n, k in legenda)
+    return f"""<figure class="card fig" id="{gid}">
+<h3>{titel}</h3>
+<p class="uitleg">{uitleg}</p>
+{f'<div class="legend">{leg}</div>' if leg else ''}
+<div class="chart{' hoog' if hoog else ''}" data-g="{gid}" role="img" aria-label="{html.escape(titel)}"></div>
+<figcaption class="meta">Bron: {bron_html}</figcaption>
+</figure>"""
+
+
+def lijn_cfg(series, fmt, vanaf=None, y0=True):
+    out = []
+    for naam, k, kleur in series:
+        pts = [p for p in R[k] if not vanaf or p[0] >= vanaf]
+        out.append(dict(naam=naam, kleur=kleur, p=pts))
+    return dict(t="lijn", s=out, fmt=fmt, y0=y0, dag=all(k == "riool" for _, k, _ in series))
+
+
+def seizoen_cfg(k, kleur, fmt, n=4):
+    per = defaultdict(list)
+    for d, v in R[k]:
+        dd = dt.date.fromisoformat(d)
+        per[seizoen_van(dd)].append([seizoen_index(dd), v, d])
+    sz = sorted(per)[-n:]
+    return dict(t="seizoen", fmt=fmt, s=[dict(naam=SZ_NAAM(s), kleur=kleur if s == sz[-1] else "var(--grijs)", nu=s == sz[-1], p=per[s]) for s in sz])
+
+
+def tabel_laatste(kolommen, n=12):
+    """kolommen: [(kop, reeks-sleutel, formatter)]"""
+    alle = sorted({d for _, k, _ in kolommen for d, _ in R[k]})[-n:]
+    idx = {k: dict(R[k]) for _, k, _ in kolommen}
+    rijen = "".join("<tr><td>" + wk_nl(dt.date.fromisoformat(d)) + "</td>" + "".join(
+        f'<td class="num">{fm(idx[k].get(d))}</td>' for _, k, fm in kolommen) + "</tr>" for d in reversed(alle))
+    return f"""<details class="onder"><summary>De cijfers van de laatste {n} weken</summary><div class="scroll"><table>
+<thead><tr><th>Week</th>{''.join(f'<th class="num">{html.escape(h)}</th>' for h, _, _ in kolommen)}</tr></thead><tbody>{rijen}</tbody></table></div></details>"""
+
+
+def tegel(label, waarde, zin, cls, href=None, kleur=None):
+    tag = f'a href="{href}"' if href else "div"
+    end = "a" if href else "div"
+    rand = f' style="border-top-color:{kleur}"' if kleur else ""
+    return f'<{tag} class="tegel"{rand}><div class="t">{label}</div><div class="g">{waarde}</div><div class="chg {cls}">{zin}</div></{end}>'
+
+
+BRON_PEIL = '<a href="https://erviss.org">ECDC ERVISS</a>, huisartsenpeilstations (Nivel en RIVM)'
+BRON_LAB = '<a href="https://erviss.org">ECDC ERVISS</a>, laboratoriumuitslagen buiten de peilstations (RIVM)'
+BRON_HA = '<a href="https://erviss.org">ECDC ERVISS</a>, huisartsconsulten (Nivel)'
+BRON_RADAR = '<a href="https://www.infectieradar.nl/">Infectieradar</a> (RIVM), <a href="https://data.rivm.nl/data/covid-19/ARI_Infectieradar_symptomen_per_dag.csv">open data</a>'
+BRON_RADAR_C = '<a href="https://www.infectieradar.nl/">Infectieradar</a> (RIVM), <a href="https://data.rivm.nl/data/covid-19/COVID-19_infectieradar_positieve_testuitslagen_per_week.csv">open data</a>'
+BRON_RIOOL = '<a href="https://www.rivm.nl/corona/actueel">RIVM rioolwatermetingen</a>, <a href="https://data.rivm.nl/data/covid-19/COVID-19_rioolwaterdata_landelijk.csv">open data</a>'
+PCT = "pct"
+EEN_JAAR = (G["d"] - dt.timedelta(days=371)).isoformat()
+TWEE_JAAR = (G["d"] - dt.timedelta(days=735)).isoformat()
+
+
+def vorig_seizoen_zin(k, naam):
+    v = zelfde_moment_vorig_seizoen(k)
+    return f" Op hetzelfde moment vorig seizoen was dat {f1(v)}%." if v is not None else ""
+
+
+# zinnen
+griep_zin = f"In {wk_nl(G['d'])} testte <b>{f1(G['v'])}%</b> van de monsters bij huisartsen positief op griep ({verschil_pp(G['v'], G['vorig'])})." + vorig_seizoen_zin("griep_pos", "griep")
+rsv_zin = f"In {wk_nl(RV['d'])} testte <b>{f1(RV['v'])}%</b> van de monsters positief op RSV ({verschil_pp(RV['v'], RV['vorig'])})." + vorig_seizoen_zin("rsv_pos", "RSV")
+covid_zin = (f"Op {datum_nl(RI['d'])} zaten er gemiddeld <b>{f0(RI['v'])} biljoen</b> coronavirusdeeltjes in het rioolwater per 100.000 inwoners ({verschil_pct(RI['v'], RI['vorig']).replace('de week ervoor', 'een week eerder')}). "
+             f"Bij huisartsen testte in {wk_nl(C['d'])} {f1(C['v'])}% van de monsters positief op covid.")
+radar_zin = f"In {wk_nl(RA['d'])} meldde <b>{f1(RA['v'])}%</b> van de deelnemers aan Infectieradar klachten van een luchtweginfectie ({verschil_pp(RA['v'], RA['vorig'])})."
+
+def tegels_home():
+    return '<div class="tegels">' + "".join([
+        tegel("Griep · positieve monsters", f1(G["v"]) + "%", verschil_pp(G["v"], G["vorig"]).replace(" ten opzichte van de week ervoor", " t.o.v. vorige week"), richting(G["v"], G["vorig"], .05), "/griep/", KLEUR["griep"]),
+        tegel("Covid · rioolwater", f0(RI["v"]), "biljoen deeltjes per 100.000 · " + verschil_pct(RI["v"], RI["vorig"]).replace(" ten opzichte van de week ervoor", " t.o.v. een week eerder"), richting(RI["v"], RI["vorig"], RI["vorig"] * .005 if RI["vorig"] else 0), "/covid/", KLEUR["covid"]),
+        tegel("RSV · positieve monsters", f1(RV["v"]) + "%", verschil_pp(RV["v"], RV["vorig"]).replace(" ten opzichte van de week ervoor", " t.o.v. vorige week"), richting(RV["v"], RV["vorig"], .05), "/rsv/", KLEUR["rsv"]),
+        tegel("Luchtwegklachten · Infectieradar", f1(RA["v"]) + "%", verschil_pp(RA["v"], RA["vorig"]).replace(" ten opzichte van de week ervoor", " t.o.v. vorige week"), richting(RA["v"], RA["vorig"], .05), "/luchtwegklachten/", KLEUR["ari"]),
+    ]) + "</div>"
+
+
+grafieken_home = {
+    "h-griep": seizoen_cfg("griep_pos", KLEUR["griep"], PCT),
+    "h-covid": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec", vanaf=TWEE_JAAR),
+    "h-rsv": seizoen_cfg("rsv_pos", KLEUR["rsv"], PCT),
+    "h-radar": lijn_cfg([("Infectieradar", "radar", KLEUR["ari"])], PCT, vanaf=TWEE_JAAR),
+}
+JL, JV = max(jaren), max(jaren) - 1
+top = sorted([z for z in ziekten if z["kort"] != "COVID-19"], key=lambda z: (-z["jaren"][JL], -z["jaren"][JV]))
+grafieken_home["h-meld"] = dict(t="staaf", s=[dict(naam=z["kort"], a=z["jaren"][JV], b=z["jaren"][JL], href=f"/ziekten/{z['slug']}/") for z in top[:10]], la=str(JV), lb=str(JL))
+
+seizoen_leg = lambda kleur: [(f"Seizoen {SZ_NAAM(huidig_sz)}", kleur), ("Eerdere seizoenen", KLEUR["grijs"])]
+
+inhoud_home = f"""<header>
+<h1>Infectieziekten in Nederland</h1>
+<p class="lead">Hoeveel griep, covid, RSV en andere infectieziekten zijn er nu in Nederland? Elke week bijgewerkt met de officiële cijfers van het RIVM, Nivel en het Europese ECDC.</p>
+<p class="meta">Laatste cijfers: {wk_nl(STAND)} · bijgewerkt {datum_nl(VANDAAG)}</p>
+</header>
+{tegels_home()}
+<section id="griep">
+<h2><small>Griep</small>Hoeveel griep is er nu?</h2>
+<p>{griep_zin}</p>
+{grafiek("h-griep", "Griep: dit seizoen naast eerdere seizoenen", "Percentage positieve monsters bij huisartsenpeilstations per week, van week 40 tot week 39.", BRON_PEIL, seizoen_leg(KLEUR["griep"]))}
+<p><a href="/griep/">Alle griepcijfers →</a></p>
+</section>
+<section id="covid">
+<h2><small>Covid</small>Hoeveel corona is er nu?</h2>
+<p>{covid_zin}</p>
+{grafiek("h-covid", "Coronavirus in het rioolwater, laatste twee jaar", "Gemiddeld aantal virusdeeltjes per 100.000 inwoners, in biljoenen (10¹²), per dag zoals het RIVM het berekent.", BRON_RIOOL, [("Rioolwater", KLEUR["covid"])])}
+<p><a href="/covid/">Alle covidcijfers →</a></p>
+</section>
+<section id="rsv">
+<h2><small>RSV</small>Hoeveel RS-virus is er nu?</h2>
+<p>{rsv_zin}</p>
+{grafiek("h-rsv", "RSV: dit seizoen naast eerdere seizoenen", "Percentage positieve monsters bij huisartsenpeilstations per week, van week 40 tot week 39.", BRON_PEIL, seizoen_leg(KLEUR["rsv"]))}
+<p><a href="/rsv/">Alle RSV-cijfers →</a></p>
+</section>
+<section id="luchtwegklachten">
+<h2><small>Luchtwegklachten</small>Hoeveel mensen zijn verkouden of grieperig?</h2>
+<p>{radar_zin}</p>
+{grafiek("h-radar", "Zelf gemelde luchtwegklachten, laatste twee jaar", "Percentage deelnemers aan Infectieradar met klachten van een acute luchtweginfectie, weekgemiddelde.", BRON_RADAR, [("Infectieradar", KLEUR["ari"])])}
+<p><a href="/luchtwegklachten/">Meer over luchtwegklachten →</a></p>
+</section>
+<section id="meldingsplichtig">
+<h2><small>Meldingsplichtige ziekten</small>Welke meldingsplichtige ziekten kwamen het meest voor in {JL}?</h2>
+<p>Artsen en laboratoria moeten {len(ziekten)} infectieziekten melden bij de GGD. Dit zijn de tien met de meeste meldingen in {JL}, zonder covid. Klik op een ziekte voor de cijfers sinds {min(jaren)}.</p>
+{grafiek("h-meld", f"Meldingen in {JV} en {JL}", "Aantal door het RIVM goedgekeurde meldingen per jaar.", f'<a href="{OVERZICHT}">RIVM, overzicht meldingen</a>', [(str(JV), KLEUR["grijs"]), (str(JL), KLEUR["griep"])], hoog=True)}
+<p><a href="/meldingsplichtige-ziekten/">Alle {len(ziekten)} meldingsplichtige ziekten →</a></p>
+</section>"""
+
+dataset_ld = {"@context": "https://schema.org", "@type": "Dataset", "name": "Infectieziekten in Nederland: wekelijkse cijfers",
+              "description": "Wekelijkse cijfers over griep, covid, RSV en luchtwegklachten in Nederland, en jaartotalen van alle meldingsplichtige infectieziekten, samengesteld uit open data van ECDC en RIVM.",
+              "url": BASIS + "/", "inLanguage": "nl", "dateModified": VANDAAG.isoformat(), "temporalCoverage": f"2016-01-01/{STAND.isoformat()}",
+              "spatialCoverage": {"@type": "Place", "name": "Nederland"},
+              "isBasedOn": ["https://github.com/EU-ECDC/Respiratory_viruses_weekly_data", "https://data.rivm.nl/", OVERZICHT],
+              "creator": {"@type": "Person", "name": "Erik Meijerink", "url": "https://erikmeijerink.nl"},
+              "distribution": {"@type": "DataDownload", "encodingFormat": "application/json", "contentUrl": BASIS + "/data.json"}}
+schrijf("/", "Infectieziekten in Nederland – griep, covid en RSV nu",
+        f"Hoeveel griep, covid en RSV is er nu in Nederland? Wekelijkse cijfers van RIVM, Nivel en ECDC: positieve tests, rioolwater, huisartsbezoek en alle meldingsplichtige ziekten. Stand {wk_nl(STAND)}.",
+        inhoud_home, grafieken_home, "home", [dataset_ld])
+
+# ---- griep
+gp = seizoenpiek("griep_pos", huidig_sz - 1)
+inhoud = f"""<header><h1>Griep in Nederland: hoeveel griep is er nu?</h1>
+<p class="lead">{griep_zin}</p>
+<p class="meta">Laatste cijfers: {wk_nl(G['d'])}</p></header>
+<div class="tegels">
+{tegel("Positieve monsters", f1(G['v']) + "%", verschil_pp(G['v'], G['vorig']), richting(G['v'], G['vorig'], .05), kleur=KLEUR['griep'])}
+{tegel("Laboratoriumuitslagen", f0(stand('griep_lab')['v']), "positieve griepuitslagen in " + wk_nl(stand('griep_lab')['d']), "flat", kleur=KLEUR['griep'])}
+{tegel(f"Piek seizoen {SZ_NAAM(huidig_sz - 1)}", (f1(gp[0]) + "%") if gp else "–", ("in " + wk_nl(dt.date.fromisoformat(gp[1]))) if gp else "", "flat", kleur=KLEUR['grijs'])}
+</div>
+{grafiek("griep-seizoen", "Griep: dit seizoen naast eerdere seizoenen", "Percentage positieve monsters bij huisartsenpeilstations. Een griepseizoen loopt van week 40 tot week 39 van het jaar erna.", BRON_PEIL, seizoen_leg(KLEUR['griep']))}
+{grafiek("griep-pos", "Aandeel positieve griepmonsters sinds 2022", f"Per week testen huisartsen in de peilstations zo'n {f0(min(v for _, v in R['monsters'][-26:]))} tot {f0(max(v for _, v in R['monsters'][-26:]))} patiënten met luchtwegklachten. Bij zo weinig monsters schommelt het percentage van week tot week.", BRON_PEIL, [("Griep", KLEUR['griep'])])}
+{grafiek("griep-lab", "Positieve griepuitslagen uit laboratoria", "Aantal positieve testen op influenza per week, uit laboratoria buiten de peilstations.", BRON_LAB, [("Griep", KLEUR['griep'])])}
+{grafiek("griep-ili", "Huisartsbezoek voor griepachtige klachten", "Consulten voor een griepachtig ziektebeeld (plotseling koorts plus luchtwegklachten) per 100.000 inwoners per week. Nederland stopte met deze reeks na week 9 van 2026; de bredere reeks staat op de pagina luchtwegklachten.", BRON_HA, [("Griepachtig ziektebeeld", KLEUR['griep'])])}
+{tabel_laatste([("Positief (%)", "griep_pos", f1), ("Monsters", "monsters", f0), ("Lab-uitslagen", "griep_lab", f0)])}
+<section><h2>Meer weten over griep</h2><ul>
+<li><a href="https://www.rivm.nl/griep-griepprik">RIVM: griep en de griepprik</a></li>
+<li><a href="https://www.rivm.nl/luchtweginfecties">RIVM: luchtweginfecties</a> (hoe het RIVM griep en andere luchtweginfecties volgt)</li>
+<li><a href="https://erviss.org">ECDC ERVISS</a> (griep in Europa per land)</li></ul></section>"""
+schrijf("/griep/", f"Griep in Nederland nu – cijfers {wk_nl(G['d'])}",
+        f"Hoeveel griep is er nu? {f1(G['v'])}% van de monsters bij huisartsen testte in {wk_nl(G['d'])} positief op griep. Dit griepseizoen naast eerdere seizoenen, met laboratorium- en huisartscijfers.",
+        inhoud, {"griep-seizoen": seizoen_cfg("griep_pos", KLEUR["griep"], PCT, 5), "griep-pos": lijn_cfg([("Griep", "griep_pos", KLEUR["griep"])], PCT),
+                 "griep-lab": lijn_cfg([("Griep", "griep_lab", KLEUR["griep"])], "int"), "griep-ili": lijn_cfg([("Griepachtig ziektebeeld", "ili", KLEUR["griep"])], "dec")},
+        "griep", kruimel=[("Griep", None)])
+
+# ---- covid
+CL = stand("covid_lab")
+inhoud = f"""<header><h1>Corona in Nederland: hoeveel covid is er nu?</h1>
+<p class="lead">{covid_zin}</p>
+<p class="meta">Laatste meting: {datum_nl(RI['d'])}</p></header>
+<div class="tegels">
+{tegel("Rioolwater", f0(RI['v']), "biljoen deeltjes per 100.000 op " + datum_nl(RI['d']) + " · " + verschil_pct(RI['v'], RI['vorig']).replace("de week ervoor", "een week eerder"), richting(RI['v'], RI['vorig'], RI['vorig'] * .005 if RI['vorig'] else 0), kleur=KLEUR['covid'])}
+{tegel("Positieve monsters huisarts", f1(C['v']) + "%", verschil_pp(C['v'], C['vorig']), richting(C['v'], C['vorig'], .05), kleur=KLEUR['covid'])}
+{tegel("Positieve test Infectieradar", f1(RC['v']) + "%", "van de deelnemers · " + wk_nl(RC['d']), richting(RC['v'], RC['vorig'], .05), kleur=KLEUR['covid'])}
+{tegel("Laboratoriumuitslagen", f0(CL['v']), "positieve coronatesten in " + wk_nl(CL['d']), "flat", kleur=KLEUR['covid'])}
+</div>
+{grafiek("covid-riool-jaar", "Coronavirus in het rioolwater, laatste twee jaar", "Gemiddeld aantal virusdeeltjes per 100.000 inwoners, in biljoenen (10¹²), per dag zoals het RIVM het berekent. Sinds juli 2025 meet het RIVM één keer per week bij ongeveer 40% van de rioolwaterzuiveringen.", BRON_RIOOL, [("Rioolwater", KLEUR['covid'])])}
+{grafiek("covid-riool", "Coronavirus in het rioolwater sinds 2020", "Dezelfde reeks vanaf het begin van de metingen in september 2020.", BRON_RIOOL, [("Rioolwater", KLEUR['covid'])])}
+{grafiek("covid-pos", "Aandeel positieve coronamonsters bij huisartsen", "Percentage van de monsters uit de huisartsenpeilstations dat positief testte op SARS-CoV-2, per week.", BRON_PEIL, [("Covid", KLEUR['covid'])])}
+{grafiek("covid-radar", "Infectieradar: deelnemers met een positieve coronatest", "Percentage van alle deelnemers die die week een vragenlijst invulden, met een positieve zelftest of PCR-test.", BRON_RADAR_C, [("Positieve test", KLEUR['covid'])])}
+{grafiek("covid-lab", "Positieve coronatesten uit laboratoria", "Aantal positieve testen op SARS-CoV-2 per week, uit laboratoria buiten de peilstations. Sinds het einde van het testbeleid wordt veel minder getest; vergelijk vooral recente weken met elkaar.", BRON_LAB, [("Covid", KLEUR['covid'])])}
+{tabel_laatste([("Positief huisarts (%)", "covid_pos", f1), ("Infectieradar (%)", "radar_covid", f1), ("Lab-uitslagen", "covid_lab", f0)])}
+<section><h2>Meer weten over corona</h2><ul>
+<li><a href="https://www.rivm.nl/corona/actueel">RIVM: actuele cijfers over corona</a></li>
+<li><a href="https://www.rivm.nl/coronavirus-covid-19">RIVM: coronavirus COVID-19</a></li>
+<li><a href="https://www.infectieradar.nl/">Infectieradar</a> (meedoen en de wekelijkse uitkomsten)</li></ul>
+<p class="uitleg">Ziekenhuis- en IC-opnames publiceert het RIVM sinds april 2024 niet meer als open data; die staan hier daarom niet.</p></section>"""
+schrijf("/covid/", f"Corona in Nederland nu – rioolwater en tests {wk_nl(C['d'])}",
+        f"Hoeveel corona is er nu? Rioolwater: {f0(RI['v'])} biljoen virusdeeltjes per 100.000 inwoners op {datum_nl(RI['d'])}. Plus positieve tests bij huisartsen, Infectieradar en laboratoria.",
+        inhoud, {"covid-riool-jaar": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec", vanaf=TWEE_JAAR),
+                 "covid-riool": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec"),
+                 "covid-pos": lijn_cfg([("Covid", "covid_pos", KLEUR["covid"])], PCT),
+                 "covid-radar": lijn_cfg([("Positieve test", "radar_covid", KLEUR["covid"])], PCT),
+                 "covid-lab": lijn_cfg([("Covid", "covid_lab", KLEUR["covid"])], "int")},
+        "covid", kruimel=[("Covid", None)])
+
+# ---- RSV
+rp = seizoenpiek("rsv_pos", huidig_sz - 1)
+inhoud = f"""<header><h1>RS-virus in Nederland: hoeveel RSV is er nu?</h1>
+<p class="lead">{rsv_zin} RSV geeft vooral bij baby's en ouderen ernstige klachten.</p>
+<p class="meta">Laatste cijfers: {wk_nl(RV['d'])}</p></header>
+<div class="tegels">
+{tegel("Positieve monsters", f1(RV['v']) + "%", verschil_pp(RV['v'], RV['vorig']), richting(RV['v'], RV['vorig'], .05), kleur=KLEUR['rsv'])}
+{tegel("Laboratoriumuitslagen", f0(stand('rsv_lab')['v']), "positieve RSV-uitslagen in " + wk_nl(stand('rsv_lab')['d']), "flat", kleur=KLEUR['rsv'])}
+{tegel(f"Piek seizoen {SZ_NAAM(huidig_sz - 1)}", (f1(rp[0]) + "%") if rp else "–", ("in " + wk_nl(dt.date.fromisoformat(rp[1]))) if rp else "", "flat", kleur=KLEUR['grijs'])}
+</div>
+{grafiek("rsv-seizoen", "RSV: dit seizoen naast eerdere seizoenen", "Percentage positieve monsters bij huisartsenpeilstations, van week 40 tot week 39.", BRON_PEIL, seizoen_leg(KLEUR['rsv']))}
+{grafiek("rsv-pos", "Aandeel positieve RSV-monsters sinds 2022", "Percentage positieve monsters bij huisartsenpeilstations per week.", BRON_PEIL, [("RSV", KLEUR['rsv'])])}
+{grafiek("rsv-lab", "Positieve RSV-uitslagen uit laboratoria", "Aantal positieve testen op RSV per week, uit laboratoria buiten de peilstations.", BRON_LAB, [("RSV", KLEUR['rsv'])])}
+{tabel_laatste([("Positief (%)", "rsv_pos", f1), ("Lab-uitslagen", "rsv_lab", f0)])}
+<section><h2>Meer weten over RSV</h2><ul>
+<li><a href="https://www.rivm.nl/rs-virus">RIVM: RS-virus</a></li>
+<li><a href="https://www.rivm.nl/rs-virus/stand-van-zaken-rs-virus">RIVM: stand van zaken RS-virus</a></li></ul></section>"""
+schrijf("/rsv/", f"RS-virus (RSV) in Nederland nu – cijfers {wk_nl(RV['d'])}",
+        f"Hoeveel RSV is er nu? {f1(RV['v'])}% van de monsters bij huisartsen testte in {wk_nl(RV['d'])} positief op het RS-virus. Dit seizoen naast eerdere seizoenen.",
+        inhoud, {"rsv-seizoen": seizoen_cfg("rsv_pos", KLEUR["rsv"], PCT, 5), "rsv-pos": lijn_cfg([("RSV", "rsv_pos", KLEUR["rsv"])], PCT),
+                 "rsv-lab": lijn_cfg([("RSV", "rsv_lab", KLEUR["rsv"])], "int")},
+        "rsv", kruimel=[("RSV", None)])
+
+# ---- luchtwegklachten
+inhoud = f"""<header><h1>Luchtwegklachten in Nederland: hoeveel mensen zijn verkouden of grieperig?</h1>
+<p class="lead">{radar_zin} Bij de huisarts ging het in {wk_nl(AR['d'])} om {f0(AR['v'])} consulten per 100.000 inwoners voor een acute luchtweginfectie ({verschil_pct(AR['v'], AR['vorig'])}).</p>
+<p class="meta">Laatste cijfers: {wk_nl(RA['d'])}</p></header>
+{grafiek("lw-radar", "Zelf gemelde luchtwegklachten", "Percentage deelnemers aan Infectieradar met klachten van een acute luchtweginfectie, zoals hoesten, keelpijn of een loopneus, weekgemiddelde sinds november 2020.", BRON_RADAR, [("Infectieradar", KLEUR['ari'])])}
+{grafiek("lw-ari", "Huisartsbezoek voor luchtweginfecties per leeftijd", "Consulten voor een acute luchtweginfectie per 100.000 inwoners per week, sinds week 40 van 2025. Jonge kinderen gaan veel vaker naar de huisarts.", BRON_HA,
+         [("0–4 jaar", "var(--covid)"), ("5–14 jaar", "var(--rsv)"), ("15–64 jaar", "var(--griep)"), ("65 jaar en ouder", "var(--ari)")])}
+{tabel_laatste([("Infectieradar (%)", "radar", f1), ("Huisarts totaal", "ari", f0), ("0–4 jaar", "ari_0_4", f0), ("65+", "ari_65", f0)])}
+<section><h2>Meer weten</h2><ul>
+<li><a href="https://www.infectieradar.nl/">Infectieradar</a>: meld zelf elke week je klachten</li>
+<li><a href="https://www.rivm.nl/luchtweginfecties">RIVM: luchtweginfecties</a></li></ul></section>"""
+ari_vanaf = "2025-09-29"
+schrijf("/luchtwegklachten/", "Luchtwegklachten en verkoudheid in Nederland nu",
+        f"Hoeveel mensen hebben nu luchtwegklachten? {f1(RA['v'])}% van de Infectieradar-deelnemers in {wk_nl(RA['d'])}, en huisartsbezoek per leeftijdsgroep.",
+        inhoud, {"lw-radar": lijn_cfg([("Infectieradar", "radar", KLEUR["ari"])], PCT),
+                 "lw-ari": lijn_cfg([("0–4 jaar", "ari_0_4", "var(--covid)"), ("5–14 jaar", "ari_5_14", "var(--rsv)"), ("15–64 jaar", "ari_15_64", "var(--griep)"), ("65+", "ari_65", "var(--ari)")], "int", vanaf=ari_vanaf)},
+        "luchtwegklachten", kruimel=[("Luchtwegklachten", None)])
+
+# ---- meldingsplichtige ziekten
+def spark(z):
+    return json.dumps([z["jaren"][j] for j in jaren])
+
+rijen = "".join(f"""<tr><td><a href="/ziekten/{z['slug']}/">{html.escape(z['kort'])}</a></td><td><span class="pill">{z['groep']}</span></td>
+<td class="num">{f0(z['jaren'][JL-2])}</td><td class="num">{f0(z['jaren'][JV])}</td><td class="num"><b>{f0(z['jaren'][JL])}</b></td>
+<td><span class="spark" data-v='{spark(z)}'></span></td></tr>""" for z in sorted(ziekten, key=lambda z: (-z['jaren'][JL], -z['jaren'][JV])))
+stijgers = sorted([z for z in ziekten if z["jaren"][JV] >= 20], key=lambda z: -(z["jaren"][JL] / z["jaren"][JV]))[:3]
+dalers = sorted([z for z in ziekten if z["jaren"][JV] >= 20], key=lambda z: z["jaren"][JL] / z["jaren"][JV])[:3]
+lijstje = lambda zz: ", ".join(f'<a href="/ziekten/{z["slug"]}/">{html.escape(in_zin(z["kort"]))}</a> ({f0(z["jaren"][JV])} → {f0(z["jaren"][JL])})' for z in zz)
+inhoud = f"""<header><h1>Meldingsplichtige infectieziekten in Nederland</h1>
+<p class="lead">Van {len(ziekten)} infectieziekten moeten artsen en laboratoria elk geval melden bij de GGD. Het RIVM houdt bij hoe vaak ze voorkomen. Hier staan de aantallen per jaar van {min(jaren)} tot en met {JL}.</p>
+<p class="meta">Stand: RIVM, Osiris-AIZ{(", selectiedatum " + selectiedatum) if selectiedatum else ""}</p></header>
+<p>De grootste stijgers van {JV} naar {JL}: {lijstje(stijgers)}. De grootste dalers: {lijstje(dalers)}. Alleen ziekten met minstens 20 meldingen in {JV} tellen mee.</p>
+{grafiek("meld-top", f"De tien meest gemelde ziekten in {JL}", "Aantal door het RIVM goedgekeurde meldingen per jaar, zonder covid.", f'<a href="{OVERZICHT}">RIVM, overzicht meldingen</a>', [(str(JV), KLEUR['grijs']), (str(JL), KLEUR['griep'])], hoog=True)}
+<div class="card"><h3>Alle meldingsplichtige ziekten</h3><p class="uitleg">Gesorteerd op het aantal meldingen in {JL}. De lijntjes lopen van {min(jaren)} tot en met {JL}. Groep A heeft de zwaarste maatregelen, groep C de lichtste.</p>
+<div class="scroll"><table><thead><tr><th>Ziekte</th><th>Groep</th><th class="num">{JL-2}</th><th class="num">{JV}</th><th class="num">{JL}</th><th>{min(jaren)}–{JL}</th></tr></thead><tbody>{rijen}</tbody></table></div></div>
+<p class="uitleg">De aantallen kunnen nog veranderen door late meldingen of als een melding na onderzoek wordt ingetrokken. Een ziekte telt mee in het jaar van de eerste ziektedag.</p>"""
+schrijf("/meldingsplichtige-ziekten/", f"Meldingsplichtige infectieziekten in Nederland – aantallen {min(jaren)}–{JL}",
+        f"Hoe vaak komen mazelen, kinkhoest, legionella, tuberculose en de andere {len(ziekten)} meldingsplichtige infectieziekten voor in Nederland? Aantallen per jaar van het RIVM, {min(jaren)} tot en met {JL}.",
+        inhoud, {"meld-top": grafieken_home["h-meld"]}, "meldingen", kruimel=[("Meldingsplichtige ziekten", None)])
+
+# ---- per ziekte
+for z in ziekten:
+    j = z["jaren"]
+    hoogste = max(j, key=lambda k: (j[k], k))
+    totaal = sum(j.values())
+    if j[JV]:
+        ver = (j[JL] - j[JV]) / j[JV] * 100
+        trend = f"{'meer' if ver > 0 else 'minder'} dan in {JV}, toen waren het er {f0(j[JV])} ({'+' if ver > 0 else '−'}{f0(abs(ver))}%)" if abs(ver) >= 0.5 else f"evenveel als in {JV}"
+    else:
+        trend = f"in {JV} waren het er 0"
+    if totaal == 0:
+        zin = f"Het RIVM kreeg tussen {min(jaren)} en {JL} geen enkele melding van {html.escape(in_zin(z['kort']))}."
+    else:
+        zin = (f"In {JL} kreeg het RIVM <b>{f0(j[JL])} {'melding' if j[JL] == 1 else 'meldingen'}</b> van {html.escape(in_zin(z['kort']))}. Dat is {trend}. "
+               f"Het hoogste aantal sinds {min(jaren)} was {f0(j[hoogste])} in {hoogste}.")
+    bronlink = f'<a href="{z["rivm"]}">RIVM-informatie over {html.escape(z["kort"])}</a>' if z["rivm"] else f'<a href="{OVERZICHT}">RIVM, overzicht meldingen</a>'
+    tabel = "".join(f'<tr><td>{k}</td><td class="num">{f0(v)}</td></tr>' for k, v in sorted(j.items(), reverse=True))
+    inhoud = f"""<header><h1>{html.escape(z['naam'])} in Nederland: aantal meldingen per jaar</h1>
+<p class="lead">{zin}</p>
+<p class="meta">Meldingsplichtig, {GROEP_UITLEG.get(z['groep'], 'groep ' + z['groep'])} · bron: RIVM</p></header>
+{f'<p class="let">Let op: {html.escape(z["noot"])}</p>' if z['noot'] else ''}
+{grafiek("ziekte", f"Meldingen van {html.escape(z['kort'])} per jaar, {min(jaren)}–{JL}", "Aantal door het RIVM goedgekeurde meldingen, op het jaar van de eerste ziektedag.", f'<a href="{OVERZICHT}">RIVM, overzicht meldingen</a>')}
+<div class="card"><h3>De aantallen</h3><div class="scroll"><table><thead><tr><th>Jaar</th><th class="num">Meldingen</th></tr></thead><tbody>{tabel}</tbody></table></div></div>
+<section><h2>Meer weten</h2><ul><li>{bronlink}</li><li><a href="https://lci.rivm.nl/richtlijnen">LCI-richtlijnen infectieziektebestrijding</a> (voor professionals)</li>
+<li><a href="/meldingsplichtige-ziekten/">Alle meldingsplichtige ziekten</a></li></ul></section>"""
+    schrijf(f"/ziekten/{z['slug']}/", f"{z['kort']} in Nederland – aantal meldingen {min(jaren)}–{JL}",
+            f"Hoe vaak komt {in_zin(z['kort'])} voor in Nederland? {f0(j[JL])} meldingen in {JL}, {f0(j[JV])} in {JV}. Aantallen per jaar van het RIVM sinds {min(jaren)}.",
+            inhoud, {"ziekte": dict(t="jaren", s=[[str(k), v] for k, v in j.items()], kleur=KLEUR["griep"])}, "meldingen",
+            kruimel=[("Meldingsplichtige ziekten", "/meldingsplichtige-ziekten/"), (z["kort"], None)])
+
+# ---- over
+inhoud = f"""<header><h1>Over deze site</h1>
+<p class="lead">Waar de cijfers vandaan komen, wat ze wel en niet zeggen, en hoe vaak ze worden bijgewerkt.</p></header>
+<section><h2>Bronnen</h2><ul>
+<li><b>Huisartsenpeilstations, laboratoria en huisartsconsulten:</b> de Europese ademhalingsvirussurveillance <a href="https://erviss.org">ERVISS</a> van het <a href="https://www.ecdc.europa.eu/en/publications-data/european-respiratory-virus-surveillance-summary-erviss">ECDC</a>. Het RIVM en Nivel leveren daar elke week de Nederlandse cijfers aan. De bestanden staan op <a href="https://github.com/EU-ECDC/Respiratory_viruses_weekly_data">GitHub</a>.</li>
+<li><b>Infectieradar:</b> een wekelijkse vragenlijst van het RIVM waarin deelnemers hun klachten en testuitslagen melden. <a href="https://data.rivm.nl/data/covid-19/">RIVM open data</a>.</li>
+<li><b>Rioolwater:</b> het landelijk gemiddelde aantal coronavirusdeeltjes per 100.000 inwoners uit metingen bij rioolwaterzuiveringen. <a href="https://data.rivm.nl/data/covid-19/COVID-19_rioolwaterdata_landelijk.csv">RIVM open data</a>.</li>
+<li><b>Meldingsplichtige ziekten:</b> de jaartabel van het RIVM uit het meldsysteem Osiris-AIZ. <a href="{OVERZICHT}">RIVM, overzicht meldingen</a>.</li></ul></section>
+<section><h2>Wat de cijfers zeggen</h2><ul>
+<li><b>Positieve monsters:</b> huisartsen in de peilstations nemen bij een deel van hun patiënten met luchtwegklachten een monster af. Het percentage positief laat zien hoeveel van die klachten door griep, RSV of corona komen. Het gaat om tientallen monsters per week, dus kleine schommelingen zeggen weinig.</li>
+<li><b>Laboratoriumuitslagen:</b> het aantal positieve testen hangt af van hoeveel er getest wordt. Vergelijk vooral weken die dicht bij elkaar liggen.</li>
+<li><b>Seizoenen:</b> een griep- of RSV-seizoen loopt van week 40 tot en met week 39 van het jaar erna.</li>
+<li><b>Rioolwater</b> zegt iets over de hoeveelheid virus in de bevolking, niet over hoeveel mensen ziek zijn. Sinds juli 2025 meet het RIVM één keer per week bij ongeveer 40% van de zuiveringen.</li>
+<li><b>Meldingen</b> tellen alleen gevallen die een arts of laboratorium vaststelde en meldde. Wie niet naar de dokter gaat, telt niet mee.</li></ul></section>
+<section><h2>Bijwerken</h2>
+<p>Elke dag haalt een script de nieuwste bestanden op. De Europese cijfers komen meestal op vrijdag, de RIVM-cijfers op woensdag. Voor publicatie controleert het script of elke bron recent is, genoeg weken bevat en geen onmogelijke waarden heeft. Klopt iets niet, dan blijft de vorige versie online. Alle berekeningen zijn vaste regels, zonder AI. De verwerkte cijfers staan in <a href="/data.json">data.json</a>.</p></section>
+<section><h2>Geen medisch advies</h2><p>Deze site laat cijfers zien en geeft geen medisch advies. Heb je klachten, bel dan je huisarts. Kijk voor adviezen op de sites van het <a href="https://www.rivm.nl/">RIVM</a> en je GGD.</p></section>"""
+schrijf("/over/", "Over deze site – bronnen en werkwijze", "Waar de cijfers over griep, covid, RSV en meldingsplichtige ziekten vandaan komen, wat ze zeggen en hoe vaak ze worden bijgewerkt.",
+        inhoud, {}, "home", kruimel=[("Over", None)])
+
+# ---- overige bestanden
+(SITE / "stijl.css").write_text(open("stijl.css").read())
+(SITE / "grafiek.js").write_text(open("grafiek.js").read())
+(SITE / "favicon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#1a2226"/><path d="M5 22 L11 14 L16 18 L21 8 L27 16" fill="none" stroke="#e9eeef" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+uitvoer = dict(bijgewerkt=VANDAAG.isoformat(), reeksen=R, meldingen=[dict(ziekte=z["naam"], groep=z["groep"], let_op=z["noot"], jaren=z["jaren"]) for z in ziekten],
+               bronnen={"ERVISS": "https://github.com/EU-ECDC/Respiratory_viruses_weekly_data", "RIVM open data": "https://data.rivm.nl/data/covid-19/", "RIVM meldingen": OVERZICHT})
+json.dump(uitvoer, open(SITE / "data.json", "w"), ensure_ascii=False, separators=(",", ":"))
+(SITE / "sitemap.xml").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+                                  "".join(f"  <url><loc>{BASIS}{x['pad']}</loc><lastmod>{VANDAAG.isoformat()}</lastmod></url>\n" for x in pagina_lijst) + "</urlset>\n")
+(SITE / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {BASIS}/sitemap.xml\n")
+(SITE / "404.html").write_text(f'<!doctype html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pagina niet gevonden</title><link rel="stylesheet" href="/stijl.css"></head><body>{NAV}<main><h1>Pagina niet gevonden</h1><p><a href="/">Naar de voorpagina</a></p></main></body></html>')
+json.dump(pagina_lijst, open(SITE / "paginas.json", "w"))
+# vingerafdruk van de cijfers (zonder datum van vandaag), voor de workflow
+import hashlib
+(SITE / "stand.txt").write_text(hashlib.md5(json.dumps([R, [z["jaren"] for z in ziekten]], sort_keys=True).encode()).hexdigest())
+print(f"ok: {len(pagina_lijst)} pagina's · griep {wk_nl(G['d'])} {f1(G['v'])}% · rioolwater {wk_nl(RI['d'])} {f0(RI['v'])} · {len(ziekten)} meldingsplichtige ziekten t/m {JL}")

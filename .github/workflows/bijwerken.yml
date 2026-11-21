@@ -1,0 +1,63 @@
+name: Bijwerken
+
+on:
+  schedule:
+    - cron: "15 7,13,19 * * *"   # drie keer per dag; RIVM publiceert op woensdag, ECDC meestal op vrijdag
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write   # om de datastand in de repo op te slaan (houdt de geplande taak ook actief)
+
+env:
+  PROJECT: infectieziekten-nl
+  SITE_URL: https://infectieziekten-nl.pages.dev
+  BASIS: https://infectieziekten-nl.pages.dev   # na het koppelen van het domein: hier het domein invullen
+
+jobs:
+  bouw:
+    runs-on: ubuntu-latest
+    concurrency: bijwerken
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bronnen ophalen (ECDC en RIVM)
+        run: python ophalen.py
+
+      - name: Site bouwen en data controleren
+        run: |
+          python build.py
+          OUD=$(curl -sf "$SITE_URL/stand.txt" || echo geen)
+          NIEUW=$(cat site/stand.txt)
+          echo "oud: $OUD  nieuw: $NIEUW"
+          if [ "$OUD" = "$NIEUW" ]; then echo "GEWIJZIGD=nee" >> "$GITHUB_ENV"; else echo "GEWIJZIGD=ja" >> "$GITHUB_ENV"; fi
+
+      - name: Grafieken vooraf renderen (voor zoekmachines) en deelafbeeldingen maken
+        if: env.GEWIJZIGD == 'ja' || github.event_name != 'schedule'
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+          python prerender.py
+
+      - name: Live zetten op Cloudflare Pages
+        if: env.GEWIJZIGD == 'ja' || github.event_name != 'schedule'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          preCommands: npx wrangler pages project create ${{ env.PROJECT }} --production-branch=main || true
+          command: pages deploy site --project-name=${{ env.PROJECT }} --branch=main
+
+      - name: Datastand opslaan in de repo
+        if: env.GEWIJZIGD == 'ja' && github.event_name == 'schedule'
+        run: |
+          cp site/stand.txt data/stand.txt
+          git config user.name "infectieziekten-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/stand.txt
+          git commit -m "Nieuwe cijfers $(date -u +%F)" || exit 0
+          git push
