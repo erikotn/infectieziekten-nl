@@ -215,6 +215,14 @@ for code, metingen in per_rwzi.items():
     zuiveringen.append(dict(code=code, naam=namen[code], lon=lon, lat=lat, prov=provincie_van(lon, lat), nu=a, toen=b,
                             groei=(a / b - 1) * 100 if b > 0 else None))
 
+# jaren waarin de ziekte niet meldingsplichtig was, volgens de voetnoten van het RIVM.
+# Een 0 in die jaren betekent "niet bijgehouden", niet "geen gevallen".
+MELDPLICHT = {"COVID-19": (2020, 2023), "Mpox": (2022, None), "CPE": (2019, None), "Tekenencefalitis": (2023, None)}
+for z in ziekten:
+    van, tot = MELDPLICHT.get(z["kort"], (None, None))
+    z["niet"] = {j for j, v in z["jaren"].items() if v == 0 and ((van and j < van) or (tot and j > tot))}
+    z["gemeld"] = {j: v for j, v in z["jaren"].items() if j not in z["niet"]}
+
 # ---------------------------------------------------------------- datacheck
 def laatste(reeks):
     return max(reeks) if reeks else None
@@ -818,10 +826,14 @@ schrijf("/luchtwegklachten/", "Luchtwegklachten en verkoudheid in Nederland nu",
 
 # ---- meldingsplichtige ziekten
 def spark(z):
-    return json.dumps([z["jaren"][j] for j in jaren])
+    return json.dumps([None if j in z["niet"] else z["jaren"][j] for j in sorted(jaren)])
+
+
+def cel(z, jaar):
+    return '<span class="meta" title="niet meldingsplichtig">–</span>' if jaar in z["niet"] else f0(z["jaren"][jaar])
 
 rijen = "".join(f"""<tr><td><a href="/ziekten/{z['slug']}/">{html.escape(z['kort'])}</a></td><td><span class="pill">{z['groep']}</span></td>
-<td class="num">{f0(z['jaren'][JL-2])}</td><td class="num">{f0(z['jaren'][JV])}</td><td class="num"><b>{f0(z['jaren'][JL])}</b></td>
+<td class="num">{cel(z, JL-2)}</td><td class="num">{cel(z, JV)}</td><td class="num"><b>{cel(z, JL)}</b></td>
 <td><span class="spark" data-v='{spark(z)}'></span></td></tr>""" for z in sorted(ziekten, key=lambda z: (-z['jaren'][JL], -z['jaren'][JV])))
 stijgers = sorted([z for z in ziekten if z["jaren"][JV] >= 20], key=lambda z: -(z["jaren"][JL] / z["jaren"][JV]))[:3]
 dalers = sorted([z for z in ziekten if z["jaren"][JV] >= 20], key=lambda z: z["jaren"][JL] / z["jaren"][JV])[:3]
@@ -831,7 +843,7 @@ inhoud = f"""<header><h1>Meldingsplichtige infectieziekten in Nederland</h1>
 <p class="meta">Stand: RIVM, Osiris-AIZ{(", selectiedatum " + selectiedatum) if selectiedatum else ""}</p></header>
 <p>De grootste stijgers van {JV} naar {JL}: {lijstje(stijgers)}. De grootste dalers: {lijstje(dalers)}. Alleen ziekten met minstens 20 meldingen in {JV} tellen mee.</p>
 {grafiek("meld-top", f"De tien meest gemelde ziekten in {JL}", "Aantal door het RIVM goedgekeurde meldingen per jaar, zonder covid.", f'<a href="{OVERZICHT}">RIVM, overzicht meldingen</a>', [(str(JV), KLEUR['grijs']), (str(JL), KLEUR['griep'])], hoog=True)}
-<div class="card"><h3>Alle meldingsplichtige ziekten</h3><p class="uitleg">Gesorteerd op het aantal meldingen in {JL}. De lijntjes lopen van {min(jaren)} tot en met {JL}. Groep A heeft de zwaarste maatregelen, groep C de lichtste.</p>
+<div class="card"><h3>Alle meldingsplichtige ziekten</h3><p class="uitleg">Gesorteerd op het aantal meldingen in {JL}. De lijntjes lopen van {min(jaren)} tot en met {JL}. Groep A heeft de zwaarste maatregelen, groep C de lichtste. Een streepje betekent dat de ziekte dat jaar niet meldingsplichtig was.</p>
 <div class="scroll"><table><thead><tr><th>Ziekte</th><th>Groep</th><th class="num">{JL-2}</th><th class="num">{JV}</th><th class="num">{JL}</th><th>{min(jaren)}–{JL}</th></tr></thead><tbody>{rijen}</tbody></table></div></div>
 <p class="uitleg">De aantallen kunnen nog veranderen door late meldingen of als een melding na onderzoek wordt ingetrokken. Een ziekte telt mee in het jaar van de eerste ziektedag.</p>"""
 schrijf("/meldingsplichtige-ziekten/", f"Meldingsplichtige infectieziekten in Nederland – aantallen {min(jaren)}–{JL}",
@@ -840,32 +852,41 @@ schrijf("/meldingsplichtige-ziekten/", f"Meldingsplichtige infectieziekten in Ne
 
 # ---- per ziekte
 for z in ziekten:
-    j = z["jaren"]
+    j = z["gemeld"]
+    naam_z = html.escape(in_zin(z["kort"]))
     hoogste = max(j, key=lambda k: (j[k], k))
     totaal = sum(j.values())
-    if j[JV]:
-        ver = (j[JL] - j[JV]) / j[JV] * 100
-        trend = f"{'meer' if ver > 0 else 'minder'} dan in {JV}, toen waren het er {f0(j[JV])} ({'+' if ver > 0 else '−'}{f0(abs(ver))}%)" if abs(ver) >= 0.5 else f"evenveel als in {JV}"
+    eerste = min(j)
+    if JL in z["niet"]:
+        zin = (f"{html.escape(z['kort'])} is niet meer meldingsplichtig, dus het RIVM telt geen meldingen meer. "
+               f"In de jaren met meldplicht ({eerste}–{max(j)}) lag het hoogste aantal in {hoogste}: <b>{f0(j[hoogste])}</b> meldingen.")
+        if z["kort"] == "COVID-19":
+            zin += ' De actuele cijfers over corona, zoals het rioolwater, staan op <a href="/covid/">de covidpagina</a>.'
     else:
-        trend = f"in {JV} waren het er 0"
-    if totaal == 0:
-        zin = f"Het RIVM kreeg tussen {min(jaren)} en {JL} geen enkele melding van {html.escape(in_zin(z['kort']))}."
-    else:
-        zin = (f"In {JL} kreeg het RIVM <b>{f0(j[JL])} {'melding' if j[JL] == 1 else 'meldingen'}</b> van {html.escape(in_zin(z['kort']))}. Dat is {trend}. "
-               f"Het hoogste aantal sinds {min(jaren)} was {f0(j[hoogste])} in {hoogste}.")
+        if j.get(JV):
+            ver = (j[JL] - j[JV]) / j[JV] * 100
+            trend = f"{'meer' if ver > 0 else 'minder'} dan in {JV}, toen waren het er {f0(j[JV])} ({'+' if ver > 0 else '−'}{f0(abs(ver))}%)" if abs(ver) >= 0.5 else f"evenveel als in {JV}"
+        else:
+            trend = f"in {JV} waren het er 0"
+        if totaal == 0:
+            zin = f"Het RIVM kreeg tussen {eerste} en {JL} geen enkele melding van {naam_z}."
+        else:
+            zin = (f"In {JL} kreeg het RIVM <b>{f0(j[JL])} {'melding' if j[JL] == 1 else 'meldingen'}</b> van {naam_z}. Dat is {trend}. "
+                   f"Het hoogste aantal sinds {eerste} was {f0(j[hoogste])} in {hoogste}.")
     bronlink = f'<a href="{z["rivm"]}">RIVM-informatie over {html.escape(z["kort"])}</a>' if z["rivm"] else f'<a href="{OVERZICHT}">RIVM, overzicht meldingen</a>'
-    tabel = "".join(f'<tr><td>{k}</td><td class="num">{f0(v)}</td></tr>' for k, v in sorted(j.items(), reverse=True))
+    tabel = "".join(f'<tr><td>{k}</td><td class="num">{"<span class=meta>niet meldingsplichtig</span>" if k in z["niet"] else f0(v)}</td></tr>' for k, v in sorted(z["jaren"].items(), reverse=True))
     inhoud = f"""<header><h1>{html.escape(z['naam'])} in Nederland: aantal meldingen per jaar</h1>
 <p class="lead">{zin}</p>
-<p class="meta">Meldingsplichtig, {GROEP_UITLEG.get(z['groep'], 'groep ' + z['groep'])} · bron: RIVM</p></header>
+<p class="meta">{"Niet meer meldingsplichtig" if JL in z["niet"] else "Meldingsplichtig, " + GROEP_UITLEG.get(z['groep'], 'groep ' + z['groep'])} · bron: RIVM</p></header>
 {f'<p class="let">Let op: {html.escape(z["noot"])}</p>' if z['noot'] else ''}
 {grafiek("ziekte", f"Meldingen van {html.escape(z['kort'])} per jaar, {min(jaren)}–{JL}", "Aantal door het RIVM goedgekeurde meldingen, op het jaar van de eerste ziektedag.", f'<a href="{OVERZICHT}">RIVM, overzicht meldingen</a>')}
 <div class="card"><h3>De aantallen</h3><div class="scroll"><table><thead><tr><th>Jaar</th><th class="num">Meldingen</th></tr></thead><tbody>{tabel}</tbody></table></div></div>
 <section><h2>Meer weten</h2><ul><li>{bronlink}</li><li><a href="https://lci.rivm.nl/richtlijnen">LCI-richtlijnen infectieziektebestrijding</a> (voor professionals)</li>
 <li><a href="/meldingsplichtige-ziekten/">Alle meldingsplichtige ziekten</a></li></ul></section>"""
     schrijf(f"/ziekten/{z['slug']}/", f"{z['kort']} in Nederland – aantal meldingen {min(jaren)}–{JL}",
-            f"Hoe vaak komt {in_zin(z['kort'])} voor in Nederland? {f0(j[JL])} meldingen in {JL}, {f0(j[JV])} in {JV}. Aantallen per jaar van het RIVM sinds {min(jaren)}.",
-            inhoud, {"ziekte": dict(t="jaren", s=[[str(k), v] for k, v in j.items()], kleur=KLEUR["griep"])}, "meldingen",
+            (f"Hoe vaak komt {in_zin(z['kort'])} voor in Nederland? {f0(j[JL])} meldingen in {JL}, {f0(j[JV])} in {JV}. Aantallen per jaar van het RIVM sinds {eerste}."
+             if JL not in z["niet"] else f"Aantal meldingen van {in_zin(z['kort'])} in Nederland per jaar, {eerste}–{max(j)}, toen de ziekte meldingsplichtig was. Cijfers van het RIVM."),
+            inhoud, {"ziekte": dict(t="jaren", s=[[str(k), None if k in z["niet"] else v] for k, v in z["jaren"].items()], kleur=KLEUR["griep"])}, "meldingen",
             kruimel=[("Meldingsplichtige ziekten", "/meldingsplichtige-ziekten/"), (z["kort"], None)])
 
 # ---- over

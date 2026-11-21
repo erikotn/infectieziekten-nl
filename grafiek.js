@@ -182,7 +182,7 @@
 
   function jaren(box, g) {
     const W = box.clientWidth || 640, H = 240, mt = 18, mb = 26;
-    const [top, ticks] = nice(Math.max(...g.s.map(p => p[1])));
+    const [top, ticks] = nice(Math.max(...g.s.map(p => p[1] || 0)));
     const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H });
     box.replaceChildren(svg);
     const ml = linkerMarge(svg, ticks, FMT.intAs);
@@ -190,6 +190,11 @@
     const bw = (W - ml) / g.s.length;
     g.s.forEach(([j, v], i) => {
       const xx = ml + i * bw;
+      if (v == null) {  // niet meldingsplichtig in dat jaar
+        txt(svg, xx + bw / 2, H - 8, W < 480 ? "'" + j.slice(2) : j, { "text-anchor": "middle" });
+        txt(svg, xx + bw / 2, H - mb - 6, "–", { "text-anchor": "middle" }).appendChild(Object.assign(document.createElementNS(NS, "title"), { textContent: "niet meldingsplichtig" }));
+        return;
+      }
       el("rect", { x: xx + bw * .15, y: y(v), width: bw * .7, height: Math.max(0, H - mb - y(v)), rx: 2, fill: i === g.s.length - 1 ? g.kleur : "var(--grijs)" }, svg);
       txt(svg, xx + bw / 2, H - 8, W < 480 ? "'" + j.slice(2) : j, { "text-anchor": "middle" });
       txt(svg, xx + bw / 2, y(v) - 4, nl(v, 0), { "text-anchor": "middle", class: "waarde" });
@@ -206,12 +211,15 @@
 
   function sparks() {
     document.querySelectorAll(".spark[data-v]").forEach(s => {
-      const v = JSON.parse(s.dataset.v), mx = Math.max(...v), w = 90, h = 20;
+      const v = JSON.parse(s.dataset.v), mx = Math.max(...v.map(a => a || 0)), w = 90, h = 20;
       const svg = el("svg", { width: w, height: h, viewBox: `0 0 ${w} ${h}`, "aria-hidden": "true" });
       if (mx > 0) {
         const x = i => 2 + (w - 6) * i / (v.length - 1), y = a => h - 2 - (h - 4) * a / mx;
-        el("path", { d: v.map((a, i) => (i ? "L" : "M") + x(i) + "," + y(a)).join(""), fill: "none", stroke: "var(--griep)", "stroke-width": 1.5 }, svg);
-        el("circle", { cx: x(v.length - 1), cy: y(v[v.length - 1]), r: 2.5, fill: "var(--griep)" }, svg);
+        let d = "", open = false;
+        v.forEach((a, i) => { if (a == null) { open = false; return; } d += (open ? "L" : "M") + x(i) + "," + y(a); open = true; });
+        el("path", { d, fill: "none", stroke: "var(--griep)", "stroke-width": 1.5 }, svg);
+        const li = v.map((a, i) => a == null ? -1 : i).filter(i => i >= 0).pop();
+        if (li != null) el("circle", { cx: x(li), cy: y(v[li]), r: 2.5, fill: "var(--griep)" }, svg);
       } else el("line", { x1: 2, x2: w - 2, y1: h - 2, y2: h - 2, class: "grid" }, svg);
       s.replaceChildren(svg);
     });
