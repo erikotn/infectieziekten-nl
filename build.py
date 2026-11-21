@@ -162,6 +162,59 @@ for tr in re.findall(r"<tr.*?</tr>", tabellen[0], re.S):
     ziekten.append(dict(naam=naam, kort=kort, slug=slug(kort), groep=groep, noot=VOETNOOT.get(noot or "", ""),
                         jaren={j: waarden[j] for j in sorted(waarden)}, rivm=RIVM_PAGINA.get(kort) or RIVM_PAGINA.get(naam)))
 
+
+# rioolwater per zuiveringsinstallatie (RIVM) + locaties (Rijkswaterstaat) + provincies (CBS/PDOK)
+locaties = {}
+with open(BRON / "rwzi_locaties.csv", newline="", encoding="utf-8-sig") as f:
+    for r in csv.DictReader(f):
+        lat, lon = num(r.get("uwwlatitude")), num(r.get("uwwlongitude"))
+        code = re.sub(r"\D", "", r.get("uwwcode", ""))[-5:]
+        if lat and lon and code:
+            locaties[code] = (lon, lat)
+PROV = json.load(open("provincies.json"))["provincies"]
+
+
+def in_poly(x, y, pts):
+    binnen = False
+    j = len(pts) - 1
+    for i in range(len(pts)):
+        xi, yi = pts[i]
+        xj, yj = pts[j]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+            binnen = not binnen
+        j = i
+    return binnen
+
+
+def provincie_van(lon, lat):
+    for p in PROV:
+        if any(in_poly(lon, lat, poly) for poly in p["polys"]):
+            return p["naam"]
+    # net buiten de vereenvoudigde kustlijn: dichtstbijzijnde provincie
+    return min(PROV, key=lambda p: min((lon - x) ** 2 + (lat - y) ** 2 for poly in p["polys"] for x, y in poly))["naam"]
+
+
+per_rwzi = defaultdict(list)
+namen = {}
+for r in rivm("riool_rwzi.csv"):
+    v = num(r["RNA_flow_per_100000"])
+    if v is not None:
+        per_rwzi[r["RWZI_AWZI_code"]].append((dt.date.fromisoformat(r["Date_measurement"]), v / 1e12))
+        namen[r["RWZI_AWZI_code"]] = r["RWZI_AWZI_name"]
+riool_eind = max(d for m in per_rwzi.values() for d, _ in m)
+n_gemeten = sum(1 for m in per_rwzi.values() if any((riool_eind - d).days < 28 for d, _ in m))
+zuiveringen = []
+for code, metingen in per_rwzi.items():
+    nu = [v for d, v in metingen if (riool_eind - d).days < 14]
+    toen = [v for d, v in metingen if 14 <= (riool_eind - d).days < 28]
+    sleutel = code.zfill(5)  # RIVM schrijft codes zonder voorloopnul, Rijkswaterstaat met
+    if not nu or not toen or sleutel not in locaties:
+        continue
+    a, b = sum(nu) / len(nu), sum(toen) / len(toen)
+    lon, lat = locaties[sleutel]
+    zuiveringen.append(dict(code=code, naam=namen[code], lon=lon, lat=lat, prov=provincie_van(lon, lat), nu=a, toen=b,
+                            groei=(a / b - 1) * 100 if b > 0 else None))
+
 # ---------------------------------------------------------------- datacheck
 def laatste(reeks):
     return max(reeks) if reeks else None
@@ -173,6 +226,10 @@ for naam, reeks, max_oud in [("peilstations (ECDC)", sentinel, 35), ("laboratori
         fout(f"{naam}: maar {len(reeks)} weken")
     if (VANDAAG - laatste(reeks)).days > max_oud:
         fout(f"{naam}: laatste week {laatste(reeks)} is ouder dan {max_oud} dagen")
+if len(zuiveringen) < 110:
+    fout(f"rioolwaterkaart: maar {len(zuiveringen)} zuiveringen met metingen in de laatste vier weken")
+if (VANDAAG - riool_eind).days > 21:
+    fout(f"rioolwater per zuivering: laatste meting {riool_eind} is te oud")
 if len(ziekten) < 50 or not jaren or len(jaren) < 5:
     fout(f"meldingstabel: {len(ziekten)} ziekten, jaren {jaren}")
 if len({z['slug'] for z in ziekten}) != len(ziekten):
@@ -278,6 +335,76 @@ G, P, RV, C = stand("griep_pos"), stand("griep_pos"), stand("rsv_pos"), stand("c
 RI, RA, RC, AR = stand("riool"), stand("radar"), stand("radar_covid"), stand("ari")
 huidig_sz = seizoen_van(G["d"])
 SZ_NAAM = lambda s: f"{s}/{str(s + 1)[2:]}"
+
+
+# ---------------------------------------------------------------- rioolwaterkaart (statische SVG)
+KLASSEN = [(-25, "down", "Daalt (meer dan 25% minder)"), (25, "gelijk", "Ongeveer gelijk (tot 25% verschil)"),
+           (100, "stijgt", "Stijgt (25 tot 100% meer)"), (1e9, "sterk", "Stijgt sterk (meer dan verdubbeld)")]
+
+
+def klasse(g):
+    if g is None:
+        return "gelijk"
+    return next(k for grens, k, _ in KLASSEN if g < grens)
+
+
+def kaart_svg(breed=520):
+    lon0, lon1, lat0, lat1 = 3.3, 7.25, 50.72, 53.58
+    kx = 0.613  # cos(52,2°): lengtegraden zijn in Nederland korter dan breedtegraden
+    sc = breed / ((lon1 - lon0) * kx)
+    hoog = round((lat1 - lat0) * sc)
+    P = lambda lon, lat: ((lon - lon0) * kx * sc, (lat1 - lat) * sc)
+    paden = []
+    for p in PROV:
+        d = "".join("M" + "L".join(f"{P(x, y)[0]:.1f},{P(x, y)[1]:.1f}" for x, y in poly) + "Z" for poly in p["polys"])
+        paden.append(f'<path d="{d}" class="prov"><title>{html.escape(p["naam"])}</title></path>')
+    mx = max(z["nu"] for z in zuiveringen) or 1
+    stippen = []
+    for z in sorted(zuiveringen, key=lambda z: -z["nu"]):
+        x, y = P(z["lon"], z["lat"])
+        r = 3 + 11 * (z["nu"] / mx) ** 0.5
+        g = "onbekend" if z["groei"] is None else ("+" if z["groei"] >= 0 else "−") + f0(abs(z["groei"])) + "%"
+        stippen.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r:.1f}" class="st {klasse(z["groei"])}"><title>{html.escape(z["naam"])} ({html.escape(z["prov"])}): {g} · {f0(z["nu"])} biljoen deeltjes per 100.000 inwoners</title></circle>')
+    return (f'<svg class="nlkaart" viewBox="0 0 {breed} {hoog}" role="img" aria-label="Kaart van Nederland met de verandering van coronavirus in het rioolwater per zuiveringsinstallatie">'
+            + "".join(paden) + "".join(stippen) + "</svg>")
+
+
+def kaart_legenda():
+    return '<div class="legend">' + "".join(f'<span><i class="dotk {k}"></i>{t}</span>' for _, k, t in KLASSEN) + "<span>Grotere stip = meer virus</span></div>"
+
+
+telling = {k: sum(1 for z in zuiveringen if klasse(z["groei"]) == k) for _, k, _ in KLASSEN}
+n_stijg = telling["stijgt"] + telling["sterk"]
+venster = f"{datum_nl(riool_eind - dt.timedelta(days=13))} t/m {datum_nl(riool_eind)}"
+kaart_zin = (f"Bij <b>{n_stijg} van de {len(zuiveringen)}</b> rioolwaterzuiveringen zat er de afgelopen twee weken meer coronavirus in het water dan in de twee weken daarvoor; "
+             f"bij {telling['sterk']} is het meer dan verdubbeld. Bij {telling['down']} daalt het.")
+
+per_prov = defaultdict(list)
+for z in zuiveringen:
+    per_prov[z["prov"]].append(z)
+prov_rijen = []
+for naam, zz in sorted(per_prov.items(), key=lambda kv: -sum(z["nu"] for z in kv[1]) / sum(z["toen"] for z in kv[1]) if sum(z["toen"] for z in kv[1]) else 0):
+    nu, toen = sum(z["nu"] for z in zz) / len(zz), sum(z["toen"] for z in zz) / len(zz)
+    g = (nu / toen - 1) * 100 if toen else None
+    st = sum(1 for z in zz if klasse(z["groei"]) in ("stijgt", "sterk"))
+    prov_rijen.append(f'<tr><td>{html.escape(naam)}</td><td class="num"><span class="chg {"up" if g and g > 25 else "down" if g and g < -25 else ""}">{"+" if (g or 0) >= 0 else "−"}{f0(abs(g or 0))}%</span></td><td class="num">{st} van {len(zz)}</td><td class="num">{f0(nu)}</td></tr>')
+prov_tabel = f"""<details class="onder"><summary>Per provincie</summary><div class="scroll"><table>
+<thead><tr><th>Provincie</th><th class="num">Verandering</th><th class="num">Zuiveringen met stijging</th><th class="num">Biljoen deeltjes (gem.)</th></tr></thead><tbody>{"".join(prov_rijen)}</tbody></table></div>
+<p class="uitleg">Verandering = gemiddelde van de zuiveringen in de provincie, laatste twee weken tegenover de twee weken daarvoor. Niet gewogen naar inwoners.</p></details>"""
+
+BRON_KAART = ('<a href="https://data.rivm.nl/data/covid-19/COVID-19_rioolwaterdata.csv">RIVM, rioolwater per zuivering</a> · locaties: '
+              '<a href="https://data.overheid.nl/dataset/48818-richtlijn-stedelijk-afvalwater---rioolwaterzuiveringsinstallaties-nederland-eu2024">Rijkswaterstaat</a> · grenzen: CBS/PDOK')
+
+
+def kaart_blok(gid):
+    return f"""<figure class="card fig" id="{gid}">
+<h3>Waar groeit corona? Rioolwater per zuivering</h3>
+<p class="uitleg">Elke stip is een rioolwaterzuivering. De kleur laat zien hoe de hoeveelheid virus veranderde: de laatste twee weken ({venster}) tegenover de twee weken daarvoor. Het RIVM meet elke week bij ongeveer {n_gemeten} zuiveringen; {len(zuiveringen)} hebben in beide periodes een meting en staan op de kaart. Eén losse meting schommelt sterk, daarom vergelijkt de kaart twee weken met twee weken.</p>
+{kaart_legenda()}
+<div class="kaartbox">{kaart_svg()}</div>
+<figcaption class="meta">Bron: {BRON_KAART}</figcaption>
+</figure>"""
+
 
 # ---------------------------------------------------------------- HTML
 KLEUR = {"griep": "var(--griep)", "covid": "var(--covid)", "rsv": "var(--rsv)", "ari": "var(--ari)", "grijs": "var(--grijs)"}
@@ -529,6 +656,8 @@ inhoud_home = f"""<header>
 {grafiek("h-covid", "Coronavirus in het rioolwater", "Virusdeeltjes per 100.000 inwoners, in biljoenen (10¹²), per dag, laatste twee jaar.", BRON_RIOOL, [("Rioolwater", KLEUR["covid"])])}
 {grafiek("h-covid-radar", "Positieve coronatest bij Infectieradar", "Percentage deelnemers met een positieve zelftest of PCR-test, per week, laatste twee jaar.", BRON_RADAR_C, [("Positieve test", KLEUR["covid"])])}
 </div>
+<p>{kaart_zin}</p>
+{kaart_blok("h-kaart")}
 <p><a href="/covid/">Alle covidcijfers →</a></p>
 </section>
 <section id="ook">
@@ -593,6 +722,11 @@ inhoud = f"""<header><h1>Corona in Nederland: hoeveel covid is er nu?</h1>
 {tegel("Positieve test Infectieradar", f1(RC['v']) + "%", "van de deelnemers · " + wk_nl(RC['d']), richting(RC['v'], RC['vorig'], .05), kleur=KLEUR['covid'])}
 {tegel("Laboratoriumuitslagen", f0(CL['v']), "positieve coronatesten in " + wk_nl(CL['d']), "flat", kleur=KLEUR['covid'])}
 </div>
+<section id="kaart"><h2><small>Per regio</small>Waar groeit corona nu?</h2>
+<p>{kaart_zin}</p>
+{kaart_blok("covid-kaart")}
+{prov_tabel}
+</section>
 {grafiek("covid-riool-jaar", "Coronavirus in het rioolwater, laatste twee jaar", "Gemiddeld aantal virusdeeltjes per 100.000 inwoners, in biljoenen (10¹²), per dag zoals het RIVM het berekent. Sinds juli 2025 meet het RIVM één keer per week bij ongeveer 40% van de rioolwaterzuiveringen.", BRON_RIOOL, [("Rioolwater", KLEUR['covid'])])}
 {grafiek("covid-riool", "Coronavirus in het rioolwater sinds 2020", "Dezelfde reeks vanaf het begin van de metingen in september 2020.", BRON_RIOOL, [("Rioolwater", KLEUR['covid'])])}
 {grafiek("covid-pos", "Aandeel positieve coronamonsters bij huisartsen", "Percentage van de monsters uit de huisartsenpeilstations dat positief testte op SARS-CoV-2, per week.", BRON_PEIL, [("Covid", KLEUR['covid'])])}

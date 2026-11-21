@@ -13,6 +13,8 @@ BESTANDEN = {
     "radar_ari.csv": RIVM + "ARI_Infectieradar_symptomen_per_dag.csv",
     "radar_covid.csv": RIVM + "COVID-19_infectieradar_positieve_testuitslagen_per_week.csv",
     "riool.csv": RIVM + "COVID-19_rioolwaterdata_landelijk.csv",
+    "riool_rwzi.csv": RIVM + "COVID-19_rioolwaterdata.csv",
+    "rwzi_locaties.csv": "https://geo.rijkswaterstaat.nl/services/ogc/gdr/richtlijn_stedelijkafvalwater/ows?service=WFS&version=2.0.0&request=GetFeature&typeName=rsa_rwzi&outputFormat=csv",
     "meldingen.html": "https://www.rivm.nl/meldingsplicht-infectieziekten/overzicht-meldingen",
 }
 fout = False

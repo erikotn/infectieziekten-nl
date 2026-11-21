@@ -96,3 +96,16 @@ footer a{color:var(--ink2);border-bottom:1px solid var(--line);text-decoration:n
 .twee>figure{margin:0;min-width:0}
 .tegels.klein .tegel .g{font-size:1.7rem}
 @media (max-width:760px){.duo,.twee{grid-template-columns:1fr}}
+
+/* rioolwaterkaart */
+.kaartbox{max-width:560px;margin:4px auto 0}
+.nlkaart{display:block;width:100%;height:auto}
+.nlkaart .prov{fill:var(--bg);stroke:var(--line);stroke-width:1}
+.nlkaart .st{stroke:var(--card);stroke-width:1;fill-opacity:.9}
+.nlkaart .st:hover{stroke:var(--ink);stroke-width:2}
+.st.down,.dotk.down{fill:var(--down);background:var(--down)}
+.st.gelijk,.dotk.gelijk{fill:var(--grijs);background:var(--grijs)}
+.st.stijgt,.dotk.stijgt{fill:#e0904a;background:#e0904a}
+.st.sterk,.dotk.sterk{fill:var(--covid);background:var(--covid)}
+.dotk{display:inline-block;width:11px;height:11px;border-radius:50%}
+td .chg.up{color:var(--up)} td .chg.down{color:var(--down)}
