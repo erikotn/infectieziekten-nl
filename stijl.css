@@ -109,3 +109,5 @@ footer a{color:var(--ink2);border-bottom:1px solid var(--line);text-decoration:n
 .st.sterk,.dotk.sterk{fill:var(--covid);background:var(--covid)}
 .dotk{display:inline-block;width:11px;height:11px;border-radius:50%}
 td .chg.up{color:var(--up)} td .chg.down{color:var(--down)}
+.duo-kaart .minileg{display:flex;gap:12px;font-family:var(--mono);font-size:.72rem;color:var(--ink3);margin-top:8px}
+.duo-kaart .minileg span{display:flex;align-items:center;gap:5px}

@@ -295,6 +295,13 @@ def drie_weken(p):
 R["griep_pos3"], R["covid_pos3"], R["rsv_pos3"] = drie_weken("Influenza"), drie_weken("SARS-CoV-2"), drie_weken("RSV")
 
 
+def jaar_eerder(k):
+    return [[(dt.date.fromisoformat(d) + dt.timedelta(days=364)).isoformat(), v] for d, v in R[k]]
+
+
+R["griep_lab_vj"], R["riool_vj"] = jaar_eerder("griep_lab"), jaar_eerder("riool")
+
+
 def stand(k):
     """laatste waarde, de waarde precies 7 dagen eerder en de datum"""
     r = R[k]
@@ -510,8 +517,18 @@ def lijn_cfg(series, fmt, vanaf=None, y0=True):
     for item in series:
         naam, k, kleur = item[:3]
         pts = [p for p in R[k] if not vanaf or p[0] >= vanaf]
-        out.append(dict(naam=naam, kleur=kleur, p=pts, dun=len(item) > 3 and item[3] == "dun"))
+        soort = item[3] if len(item) > 3 else ""
+        out.append(dict(naam=naam, kleur=kleur, p=pts, dun=soort == "dun", vj=soort == "vj"))
     return dict(t="lijn", s=out, fmt=fmt, y0=y0, dag=all(item[1] == "riool" for item in series))
+
+
+def tot_nu(cfg):
+    """vorig-jaarlijn niet verder laten lopen dan de laatste datum van dit jaar"""
+    eind = max(p[0] for s_ in cfg["s"] if not s_["vj"] for p in s_["p"])
+    for s_ in cfg["s"]:
+        if s_["vj"]:
+            s_["p"] = [p for p in s_["p"] if p[0] <= eind]
+    return cfg
 
 
 def seizoen_cfg(k, kleur, fmt, n=4):
@@ -614,7 +631,8 @@ def duo_kaart(soort, titel, href, groot, eenheid, context, cls, oms, tweede, min
 <div class="g {cls}">{groot}<span class="e">{eenheid}</span></div>
 {f'<div class="groei">{context}</div>' if context else ''}
 <div class="oms">{oms}</div>
-<div class="chart mini" data-g="{mini_id}" role="img" aria-label="{titel}, laatste jaar"></div>
+<div class="minileg"><span><i class="sw" style="background:var(--k)"></i>dit jaar</span><span><i class="sw" style="background:var(--grijs)"></i>een jaar eerder</span></div>
+<div class="chart mini" data-g="{mini_id}" role="img" aria-label="{titel}, laatste jaar, met een jaar eerder ter vergelijking"></div>
 <div class="tweede">{tweede}</div>
 <div class="naar">Alle {titel.lower()}cijfers →</div>
 </a>"""
@@ -626,13 +644,13 @@ def duo_home():
     pos = round(G["v"] * MON["v"] / 100) if MON["d"] == G["d"] else None
     g_groot, g_ctx, g_cls = groei("griep_lab")
     c_groot, c_ctx, c_cls = groei("riool")
-    huisarts = f"Huisarts: <b>{f1(G['v'])}%</b> van de monsters positief op griep" + (f" ({pos} van {f0(MON['v'])})" if pos is not None else "") + f" in {wk_nl(G['d'])}"
+    huisarts = f"Huisarts: <b>{f1(R['griep_pos3'][-1][1])}%</b> van de monsters positief op griep, gemiddeld over de laatste drie weken"
     return '<div class="duo">' + duo_kaart(
         "griep", "Griep", "/griep/", g_groot, " t.o.v. vorige week", g_ctx, g_cls,
         f"Positieve griepuitslagen uit laboratoria: <b>{f0(GL['v'])}</b> in {wk_nl(GL['d'])}", huisarts, "duo-griep") + duo_kaart(
         "covid", "Covid", "/covid/", c_groot, " t.o.v. vorige week", c_ctx, c_cls,
         f"Coronavirus in het rioolwater, gemeten op {datum_nl(RI['d'])}",
-        f"Huisarts: <b>{f1(C['v'])}%</b> van de monsters positief op covid in {wk_nl(C['d'])}", "duo-covid") + "</div>"
+        f"Huisarts: <b>{f1(R['covid_pos3'][-1][1])}%</b> van de monsters positief op covid, gemiddeld over de laatste drie weken", "duo-covid") + "</div>"
 
 
 def tegels_overig():
@@ -643,8 +661,8 @@ def tegels_overig():
 
 
 grafieken_home = {
-    "duo-griep": lijn_cfg([("Griep", "griep_lab", KLEUR["griep"])], "int", vanaf=EEN_JAAR),
-    "duo-covid": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec", vanaf=EEN_JAAR),
+    "duo-griep": tot_nu(lijn_cfg([("Een jaar eerder", "griep_lab_vj", KLEUR["grijs"], "vj"), ("Dit jaar", "griep_lab", KLEUR["griep"])], "int", vanaf=EEN_JAAR)),
+    "duo-covid": tot_nu(lijn_cfg([("Een jaar eerder", "riool_vj", KLEUR["grijs"], "vj"), ("Dit jaar", "riool", KLEUR["covid"])], "dec", vanaf=EEN_JAAR)),
     "h-samen": lijn_cfg([("Griep (3 weken)", "griep_pos3", KLEUR["griep"]), ("Covid (3 weken)", "covid_pos3", KLEUR["covid"])], PCT, vanaf=TWEE_JAAR),
     "h-covid-radar": lijn_cfg([("Positieve test", "radar_covid", KLEUR["covid"])], PCT, vanaf=TWEE_JAAR),
     "h-griep": seizoen_cfg("griep_pos", KLEUR["griep"], PCT),
