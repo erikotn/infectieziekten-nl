@@ -411,12 +411,56 @@ covid_zin = (f"Op {datum_nl(RI['d'])} zaten er gemiddeld <b>{f0(RI['v'])} biljoe
              f"Bij huisartsen testte in {wk_nl(C['d'])} {f1(C['v'])}% van de monsters positief op covid.")
 radar_zin = f"In {wk_nl(RA['d'])} meldde <b>{f1(RA['v'])}%</b> van de deelnemers aan Infectieradar klachten van een luchtweginfectie ({verschil_pp(RA['v'], RA['vorig'])})."
 
-def duo_kaart(soort, titel, href, groot, eenheid, verschil, cls, tweede, mini_id):
+def weken_op_rij(k):
+    """hoeveel weken op rij de waarde steeg (+) of daalde (-), telkens vergeleken met 7 dagen eerder"""
+    idx = dict(R[k])
+    d = dt.date.fromisoformat(R[k][-1][0])
+    teken, n = 0, 0
+    while True:
+        a, b = idx.get(d.isoformat()), idx.get((d - dt.timedelta(days=7)).isoformat())
+        if a is None or b is None or a == b:
+            break
+        t = 1 if a > b else -1
+        if teken and t != teken:
+            break
+        teken, n, d = t, n + 1, d - dt.timedelta(days=7)
+    return teken * n
+
+
+def sinds(k):
+    """'hoogste sinds januari 2024' of 'laagste sinds ...', alleen als dat minstens 8 weken terug is"""
+    laatste_d, laatste_v = R[k][-1]
+    hoger = weken_op_rij(k) >= 0
+    for d, v in reversed(R[k][:-1]):
+        if (v >= laatste_v) if hoger else (v <= laatste_v):
+            dd = dt.date.fromisoformat(d)
+            if (dt.date.fromisoformat(laatste_d) - dd).days < 56:
+                return ""
+            return f"{'hoogste' if hoger else 'laagste'} sinds {MAAND[dd.month - 1]} {dd.year}"
+    return f"{'hoogste' if hoger else 'laagste'} sinds het begin van de metingen"
+
+
+def groei_regel(k, eenheid_vorige):
+    s0 = stand(k)
+    delen = []
+    if s0["vorig"]:
+        d = (s0["v"] - s0["vorig"]) / s0["vorig"] * 100
+        delen.append("gelijk aan " + eenheid_vorige if abs(d) < 0.5 else f"{'+' if d > 0 else '−'}{f0(abs(d))}% t.o.v. {eenheid_vorige}")
+    n = weken_op_rij(k)
+    if abs(n) >= 2:
+        delen.append(f"{abs(n)}e week op rij {'gestegen' if n > 0 else 'gedaald'}")
+    z = sinds(k)
+    if z:
+        delen.append(z)
+    return " · ".join(delen), richting(s0["v"], s0["vorig"], (s0["vorig"] or 0) * .005)
+
+
+def duo_kaart(soort, titel, href, groot, eenheid, groei, cls, oms, tweede, mini_id):
     return f"""<a class="duo-kaart" href="{href}" style="--k:{KLEUR[soort]}">
 <div class="t">{titel}</div>
 <div class="g">{groot}<span class="e">{eenheid}</span></div>
-<div class="oms">{verschil.split("<br>")[0]}</div>
-<div class="chg {cls}">{verschil.split("<br>")[1]}</div>
+<div class="groei {cls}">{groei}</div>
+<div class="oms">{oms}</div>
 <div class="chart mini" data-g="{mini_id}" role="img" aria-label="{titel}, laatste jaar"></div>
 <div class="tweede">{tweede}</div>
 <div class="naar">Alle {titel.lower()}cijfers →</div>
@@ -424,12 +468,18 @@ def duo_kaart(soort, titel, href, groot, eenheid, verschil, cls, tweede, mini_id
 
 
 def duo_home():
-    kort = lambda x: x.replace(" ten opzichte van de week ervoor", " t.o.v. vorige week").replace(" ten opzichte van een week eerder", " t.o.v. een week eerder")
+    GL = stand("griep_lab")
+    MON = stand("monsters")
+    pos = round(G["v"] * MON["v"] / 100) if MON["d"] == G["d"] else None
+    g_groei, g_cls = groei_regel("griep_lab", "vorige week")
+    c_groei, c_cls = groei_regel("riool", "een week eerder")
+    huisarts = f"Huisarts: <b>{f1(G['v'])}%</b> van de monsters positief op griep" + (f" ({pos} van {f0(MON['v'])})" if pos is not None else "") + f" in {wk_nl(G['d'])}"
     return '<div class="duo">' + duo_kaart(
-        "griep", "Griep", "/griep/", f1(G["v"]), "%", f"positieve monsters bij de huisarts · {wk_nl(G['d'])}<br>" + kort(verschil_pp(G["v"], G["vorig"])),
-        richting(G["v"], G["vorig"], .05), f"Laboratoria: <b>{f0(stand('griep_lab')['v'])}</b> positieve griepuitslagen in {wk_nl(stand('griep_lab')['d'])}", "duo-griep") + duo_kaart(
-        "covid", "Covid", "/covid/", f0(RI["v"]), " biljoen", f"virusdeeltjes in het rioolwater per 100.000 inwoners · {datum_nl(RI['d'])}<br>" + verschil_pct(RI["v"], RI["vorig"]).replace("ten opzichte van de week ervoor", "t.o.v. een week eerder"),
-        richting(RI["v"], RI["vorig"], RI["vorig"] * .005 if RI["vorig"] else 0), f"Huisarts: <b>{f1(C['v'])}%</b> van de monsters positief op covid in {wk_nl(C['d'])}", "duo-covid") + "</div>"
+        "griep", "Griep", "/griep/", f0(GL["v"]), " uitslagen", g_groei, g_cls,
+        f"positieve griepuitslagen uit laboratoria · {wk_nl(GL['d'])}", huisarts, "duo-griep") + duo_kaart(
+        "covid", "Covid", "/covid/", f0(RI["v"]), " biljoen", c_groei, c_cls,
+        f"virusdeeltjes in het rioolwater per 100.000 inwoners · {datum_nl(RI['d'])}",
+        f"Huisarts: <b>{f1(C['v'])}%</b> van de monsters positief op covid in {wk_nl(C['d'])}", "duo-covid") + "</div>"
 
 
 def tegels_overig():
@@ -440,7 +490,7 @@ def tegels_overig():
 
 
 grafieken_home = {
-    "duo-griep": lijn_cfg([("Griep", "griep_pos", KLEUR["griep"])], PCT, vanaf=EEN_JAAR),
+    "duo-griep": lijn_cfg([("Griep", "griep_lab", KLEUR["griep"])], "int", vanaf=EEN_JAAR),
     "duo-covid": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec", vanaf=EEN_JAAR),
     "h-samen": lijn_cfg([("Griep", "griep_pos", KLEUR["griep"]), ("Covid", "covid_pos", KLEUR["covid"])], PCT, vanaf=TWEE_JAAR),
     "h-covid-radar": lijn_cfg([("Positieve test", "radar_covid", KLEUR["covid"])], PCT, vanaf=TWEE_JAAR),
