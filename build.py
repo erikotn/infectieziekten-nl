@@ -440,26 +440,27 @@ def sinds(k):
     return f"{'hoogste' if hoger else 'laagste'} sinds het begin van de metingen"
 
 
-def groei_regel(k, eenheid_vorige):
+def groei(k):
+    """(groot getal, context-regel, css-klasse): procentuele groei t.o.v. 7 dagen eerder, weken op rij, hoogste/laagste sinds"""
     s0 = stand(k)
-    delen = []
     if s0["vorig"]:
         d = (s0["v"] - s0["vorig"]) / s0["vorig"] * 100
-        delen.append("gelijk aan " + eenheid_vorige if abs(d) < 0.5 else f"{'+' if d > 0 else '−'}{f0(abs(d))}% t.o.v. {eenheid_vorige}")
+        groot = "±0%" if abs(d) < 0.5 else f"{'+' if d > 0 else '−'}{f0(abs(d))}%"
+    else:
+        groot = "–"
     n = weken_op_rij(k)
-    if abs(n) >= 2:
-        delen.append(f"{abs(n)}e week op rij {'gestegen' if n > 0 else 'gedaald'}")
+    delen = [f"{abs(n)}e week op rij {'gestegen' if n > 0 else 'gedaald'}"] if abs(n) >= 2 else []
     z = sinds(k)
     if z:
         delen.append(z)
-    return " · ".join(delen), richting(s0["v"], s0["vorig"], (s0["vorig"] or 0) * .005)
+    return groot, " · ".join(delen), richting(s0["v"], s0["vorig"], (s0["vorig"] or 0) * .005)
 
 
-def duo_kaart(soort, titel, href, groot, eenheid, groei, cls, oms, tweede, mini_id):
+def duo_kaart(soort, titel, href, groot, eenheid, context, cls, oms, tweede, mini_id):
     return f"""<a class="duo-kaart" href="{href}" style="--k:{KLEUR[soort]}">
 <div class="t">{titel}</div>
-<div class="g">{groot}<span class="e">{eenheid}</span></div>
-<div class="groei {cls}">{groei}</div>
+<div class="g {cls}">{groot}<span class="e">{eenheid}</span></div>
+{f'<div class="groei">{context}</div>' if context else ''}
 <div class="oms">{oms}</div>
 <div class="chart mini" data-g="{mini_id}" role="img" aria-label="{titel}, laatste jaar"></div>
 <div class="tweede">{tweede}</div>
@@ -471,14 +472,14 @@ def duo_home():
     GL = stand("griep_lab")
     MON = stand("monsters")
     pos = round(G["v"] * MON["v"] / 100) if MON["d"] == G["d"] else None
-    g_groei, g_cls = groei_regel("griep_lab", "vorige week")
-    c_groei, c_cls = groei_regel("riool", "een week eerder")
+    g_groot, g_ctx, g_cls = groei("griep_lab")
+    c_groot, c_ctx, c_cls = groei("riool")
     huisarts = f"Huisarts: <b>{f1(G['v'])}%</b> van de monsters positief op griep" + (f" ({pos} van {f0(MON['v'])})" if pos is not None else "") + f" in {wk_nl(G['d'])}"
     return '<div class="duo">' + duo_kaart(
-        "griep", "Griep", "/griep/", f0(GL["v"]), " uitslagen", g_groei, g_cls,
-        f"positieve griepuitslagen uit laboratoria · {wk_nl(GL['d'])}", huisarts, "duo-griep") + duo_kaart(
-        "covid", "Covid", "/covid/", f0(RI["v"]), " biljoen", c_groei, c_cls,
-        f"virusdeeltjes in het rioolwater per 100.000 inwoners · {datum_nl(RI['d'])}",
+        "griep", "Griep", "/griep/", g_groot, " t.o.v. vorige week", g_ctx, g_cls,
+        f"Positieve griepuitslagen uit laboratoria: <b>{f0(GL['v'])}</b> in {wk_nl(GL['d'])}", huisarts, "duo-griep") + duo_kaart(
+        "covid", "Covid", "/covid/", c_groot, " t.o.v. vorige week", c_ctx, c_cls,
+        f"Coronavirus in het rioolwater, gemeten op {datum_nl(RI['d'])}",
         f"Huisarts: <b>{f1(C['v'])}%</b> van de monsters positief op covid in {wk_nl(C['d'])}", "duo-covid") + "</div>"
 
 

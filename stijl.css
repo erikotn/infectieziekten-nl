@@ -83,10 +83,10 @@ footer a{color:var(--ink2);border-bottom:1px solid var(--line);text-decoration:n
 .duo-kaart:hover{border-color:var(--ink3);border-top-color:var(--k)}
 .duo-kaart .t{font-size:1.5rem;font-weight:650;letter-spacing:-.02em;color:var(--k)}
 .duo-kaart .g{font-size:clamp(2.8rem,8vw,4.2rem);font-weight:700;line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
-.duo-kaart .g .e{font-size:.4em;font-weight:600;letter-spacing:0;margin-left:4px;color:var(--ink2)}
+.duo-kaart .g .e{display:inline-block;font-size:.4em;font-weight:600;letter-spacing:0;margin-left:6px;color:var(--ink2);white-space:nowrap;line-height:1.2}
+.duo-kaart .g.up{color:var(--up)} .duo-kaart .g.down{color:var(--down)}
 .duo-kaart .groei{font-size:clamp(1.05rem,2.4vw,1.25rem);font-weight:650;line-height:1.3;color:var(--ink);margin-top:4px}
-.duo-kaart .groei.up{color:var(--up)} .duo-kaart .groei.down{color:var(--down)}
-.duo-kaart .oms{font-size:.85rem;color:var(--ink3);font-family:var(--mono)}
+.duo-kaart .oms{font-size:.92rem;color:var(--ink2);margin-top:2px}
 .duo-kaart .chg{font-size:.9rem;color:var(--ink2);font-weight:600}
 .duo-kaart .chg.up{color:var(--up)} .duo-kaart .chg.down{color:var(--down)}
 .duo-kaart .tweede{font-size:.92rem;color:var(--ink2);border-top:1px solid var(--line);padding-top:8px;margin-top:4px}
