@@ -76,3 +76,21 @@ nav.top .in>a[aria-current]{background:var(--ink);color:#fff;border-color:var(--
 footer{margin-top:56px;border-top:1px solid var(--ink);padding-top:16px;font-size:.88rem;color:var(--ink3)}
 footer a{color:var(--ink2);border-bottom:1px solid var(--line);text-decoration:none}
 .hoekje{margin:14px 0 0}
+
+/* voorpagina: griep en covid als duo */
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:22px 0 8px}
+.duo-kaart{display:flex;flex-direction:column;gap:4px;background:var(--card);border:1px solid var(--line);border-top:8px solid var(--k);border-radius:14px;padding:18px;text-decoration:none;color:var(--ink);min-width:0}
+.duo-kaart:hover{border-color:var(--ink3);border-top-color:var(--k)}
+.duo-kaart .t{font-size:1.5rem;font-weight:650;letter-spacing:-.02em;color:var(--k)}
+.duo-kaart .g{font-size:clamp(2.8rem,8vw,4.2rem);font-weight:700;line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.duo-kaart .g .e{font-size:.4em;font-weight:600;letter-spacing:0;margin-left:4px;color:var(--ink2)}
+.duo-kaart .oms{font-size:.9rem;color:var(--ink2)}
+.duo-kaart .chg{font-size:.9rem;color:var(--ink2);font-weight:600}
+.duo-kaart .chg.up{color:var(--up)} .duo-kaart .chg.down{color:var(--down)}
+.duo-kaart .tweede{font-size:.92rem;color:var(--ink2);border-top:1px solid var(--line);padding-top:8px;margin-top:4px}
+.duo-kaart .naar{font-size:.9rem;color:var(--accent);margin-top:auto;padding-top:6px}
+.chart.mini{min-height:130px;margin:6px 0 2px}
+.twee{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.twee>figure{margin:0;min-width:0}
+.tegels.klein .tegel .g{font-size:1.7rem}
+@media (max-width:760px){.duo,.twee{grid-template-columns:1fr}}

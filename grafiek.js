@@ -64,7 +64,8 @@
   }
 
   function lijn(box, g) {
-    const W = box.clientWidth || 640, H = box.classList.contains("hoog") ? 360 : 260, mt = 10, mb = 26;
+    const mini = box.classList.contains("mini");
+    const W = box.clientWidth || 640, H = box.classList.contains("hoog") ? 360 : mini ? 130 : 260, mt = 10, mb = 26;
     const fmt = FMT[g.fmt], fmtAs = FMT[g.fmt + "As"];
     const alle = g.s.flatMap(s => s.p);
     if (!alle.length) return;

@@ -411,16 +411,39 @@ covid_zin = (f"Op {datum_nl(RI['d'])} zaten er gemiddeld <b>{f0(RI['v'])} biljoe
              f"Bij huisartsen testte in {wk_nl(C['d'])} {f1(C['v'])}% van de monsters positief op covid.")
 radar_zin = f"In {wk_nl(RA['d'])} meldde <b>{f1(RA['v'])}%</b> van de deelnemers aan Infectieradar klachten van een luchtweginfectie ({verschil_pp(RA['v'], RA['vorig'])})."
 
-def tegels_home():
-    return '<div class="tegels">' + "".join([
-        tegel("Griep · positieve monsters", f1(G["v"]) + "%", verschil_pp(G["v"], G["vorig"]).replace(" ten opzichte van de week ervoor", " t.o.v. vorige week"), richting(G["v"], G["vorig"], .05), "/griep/", KLEUR["griep"]),
-        tegel("Covid · rioolwater", f0(RI["v"]), "biljoen deeltjes per 100.000 · " + verschil_pct(RI["v"], RI["vorig"]).replace(" ten opzichte van de week ervoor", " t.o.v. een week eerder"), richting(RI["v"], RI["vorig"], RI["vorig"] * .005 if RI["vorig"] else 0), "/covid/", KLEUR["covid"]),
+def duo_kaart(soort, titel, href, groot, eenheid, verschil, cls, tweede, mini_id):
+    return f"""<a class="duo-kaart" href="{href}" style="--k:{KLEUR[soort]}">
+<div class="t">{titel}</div>
+<div class="g">{groot}<span class="e">{eenheid}</span></div>
+<div class="oms">{verschil.split("<br>")[0]}</div>
+<div class="chg {cls}">{verschil.split("<br>")[1]}</div>
+<div class="chart mini" data-g="{mini_id}" role="img" aria-label="{titel}, laatste jaar"></div>
+<div class="tweede">{tweede}</div>
+<div class="naar">Alle {titel.lower()}cijfers →</div>
+</a>"""
+
+
+def duo_home():
+    kort = lambda x: x.replace(" ten opzichte van de week ervoor", " t.o.v. vorige week").replace(" ten opzichte van een week eerder", " t.o.v. een week eerder")
+    return '<div class="duo">' + duo_kaart(
+        "griep", "Griep", "/griep/", f1(G["v"]), "%", f"positieve monsters bij de huisarts · {wk_nl(G['d'])}<br>" + kort(verschil_pp(G["v"], G["vorig"])),
+        richting(G["v"], G["vorig"], .05), f"Laboratoria: <b>{f0(stand('griep_lab')['v'])}</b> positieve griepuitslagen in {wk_nl(stand('griep_lab')['d'])}", "duo-griep") + duo_kaart(
+        "covid", "Covid", "/covid/", f0(RI["v"]), " biljoen", f"virusdeeltjes in het rioolwater per 100.000 inwoners · {datum_nl(RI['d'])}<br>" + verschil_pct(RI["v"], RI["vorig"]).replace("ten opzichte van de week ervoor", "t.o.v. een week eerder"),
+        richting(RI["v"], RI["vorig"], RI["vorig"] * .005 if RI["vorig"] else 0), f"Huisarts: <b>{f1(C['v'])}%</b> van de monsters positief op covid in {wk_nl(C['d'])}", "duo-covid") + "</div>"
+
+
+def tegels_overig():
+    return '<div class="tegels klein">' + "".join([
         tegel("RSV · positieve monsters", f1(RV["v"]) + "%", verschil_pp(RV["v"], RV["vorig"]).replace(" ten opzichte van de week ervoor", " t.o.v. vorige week"), richting(RV["v"], RV["vorig"], .05), "/rsv/", KLEUR["rsv"]),
         tegel("Luchtwegklachten · Infectieradar", f1(RA["v"]) + "%", verschil_pp(RA["v"], RA["vorig"]).replace(" ten opzichte van de week ervoor", " t.o.v. vorige week"), richting(RA["v"], RA["vorig"], .05), "/luchtwegklachten/", KLEUR["ari"]),
     ]) + "</div>"
 
 
 grafieken_home = {
+    "duo-griep": lijn_cfg([("Griep", "griep_pos", KLEUR["griep"])], PCT, vanaf=EEN_JAAR),
+    "duo-covid": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec", vanaf=EEN_JAAR),
+    "h-samen": lijn_cfg([("Griep", "griep_pos", KLEUR["griep"]), ("Covid", "covid_pos", KLEUR["covid"])], PCT, vanaf=TWEE_JAAR),
+    "h-covid-radar": lijn_cfg([("Positieve test", "radar_covid", KLEUR["covid"])], PCT, vanaf=TWEE_JAAR),
     "h-griep": seizoen_cfg("griep_pos", KLEUR["griep"], PCT),
     "h-covid": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec", vanaf=TWEE_JAAR),
     "h-rsv": seizoen_cfg("rsv_pos", KLEUR["rsv"], PCT),
@@ -433,34 +456,37 @@ grafieken_home["h-meld"] = dict(t="staaf", s=[dict(naam=z["kort"], a=z["jaren"][
 seizoen_leg = lambda kleur: [(f"Seizoen {SZ_NAAM(huidig_sz)}", kleur), ("Eerdere seizoenen", KLEUR["grijs"])]
 
 inhoud_home = f"""<header>
-<h1>Infectieziekten in Nederland</h1>
-<p class="lead">Hoeveel griep, covid, RSV en andere infectieziekten zijn er nu in Nederland? Elke week bijgewerkt met de officiële cijfers van het RIVM, Nivel en het Europese ECDC.</p>
+<h1>Hoeveel griep en corona is er nu?</h1>
+<p class="lead">De actuele cijfers over griep en covid in Nederland, plus RSV, luchtwegklachten en alle meldingsplichtige infectieziekten. Elke week bijgewerkt met de officiële cijfers van het RIVM, Nivel en het Europese ECDC.</p>
 <p class="meta">Laatste cijfers: {wk_nl(STAND)} · bijgewerkt {datum_nl(VANDAAG)}</p>
 </header>
-{tegels_home()}
+{duo_home()}
+<section id="samen">
+<h2><small>Griep en covid</small>Hoeveel luchtwegklachten komen door griep of covid?</h2>
+<p>Huisartsen in de peilstations testen elke week een deel van hun patiënten met luchtwegklachten op griep en op corona. {griep_zin} Covid: {f1(C['v'])}% in {wk_nl(C['d'])}.</p>
+{grafiek("h-samen", "Griep en covid bij de huisarts, laatste twee jaar", "Percentage positieve monsters per week bij de huisartsenpeilstations.", BRON_PEIL, [("Griep", KLEUR["griep"]), ("Covid", KLEUR["covid"])])}
+</section>
 <section id="griep">
-<h2><small>Griep</small>Hoeveel griep is er nu?</h2>
-<p>{griep_zin}</p>
+<h2><small>Griep</small>Hoe verloopt dit griepseizoen?</h2>
 {grafiek("h-griep", "Griep: dit seizoen naast eerdere seizoenen", "Percentage positieve monsters bij huisartsenpeilstations per week, van week 40 tot week 39.", BRON_PEIL, seizoen_leg(KLEUR["griep"]))}
 <p><a href="/griep/">Alle griepcijfers →</a></p>
 </section>
 <section id="covid">
 <h2><small>Covid</small>Hoeveel corona is er nu?</h2>
 <p>{covid_zin}</p>
-{grafiek("h-covid", "Coronavirus in het rioolwater, laatste twee jaar", "Gemiddeld aantal virusdeeltjes per 100.000 inwoners, in biljoenen (10¹²), per dag zoals het RIVM het berekent.", BRON_RIOOL, [("Rioolwater", KLEUR["covid"])])}
+<div class="twee">
+{grafiek("h-covid", "Coronavirus in het rioolwater", "Virusdeeltjes per 100.000 inwoners, in biljoenen (10¹²), per dag, laatste twee jaar.", BRON_RIOOL, [("Rioolwater", KLEUR["covid"])])}
+{grafiek("h-covid-radar", "Positieve coronatest bij Infectieradar", "Percentage deelnemers met een positieve zelftest of PCR-test, per week, laatste twee jaar.", BRON_RADAR_C, [("Positieve test", KLEUR["covid"])])}
+</div>
 <p><a href="/covid/">Alle covidcijfers →</a></p>
 </section>
-<section id="rsv">
-<h2><small>RSV</small>Hoeveel RS-virus is er nu?</h2>
-<p>{rsv_zin}</p>
-{grafiek("h-rsv", "RSV: dit seizoen naast eerdere seizoenen", "Percentage positieve monsters bij huisartsenpeilstations per week, van week 40 tot week 39.", BRON_PEIL, seizoen_leg(KLEUR["rsv"]))}
-<p><a href="/rsv/">Alle RSV-cijfers →</a></p>
-</section>
-<section id="luchtwegklachten">
-<h2><small>Luchtwegklachten</small>Hoeveel mensen zijn verkouden of grieperig?</h2>
-<p>{radar_zin}</p>
-{grafiek("h-radar", "Zelf gemelde luchtwegklachten, laatste twee jaar", "Percentage deelnemers aan Infectieradar met klachten van een acute luchtweginfectie, weekgemiddelde.", BRON_RADAR, [("Infectieradar", KLEUR["ari"])])}
-<p><a href="/luchtwegklachten/">Meer over luchtwegklachten →</a></p>
+<section id="ook">
+<h2><small>Ook gevolgd</small>RSV en luchtwegklachten</h2>
+{tegels_overig()}
+<div class="twee">
+{grafiek("h-rsv", "RSV: dit seizoen naast eerdere seizoenen", "Percentage positieve monsters bij huisartsenpeilstations, week 40 tot week 39.", BRON_PEIL, seizoen_leg(KLEUR["rsv"]))}
+{grafiek("h-radar", "Zelf gemelde luchtwegklachten", "Percentage Infectieradar-deelnemers met klachten van een luchtweginfectie, laatste twee jaar.", BRON_RADAR, [("Infectieradar", KLEUR["ari"])])}
+</div>
 </section>
 <section id="meldingsplichtig">
 <h2><small>Meldingsplichtige ziekten</small>Welke meldingsplichtige ziekten kwamen het meest voor in {JL}?</h2>
@@ -476,8 +502,8 @@ dataset_ld = {"@context": "https://schema.org", "@type": "Dataset", "name": "Inf
               "isBasedOn": ["https://github.com/EU-ECDC/Respiratory_viruses_weekly_data", "https://data.rivm.nl/", OVERZICHT],
               "creator": {"@type": "Person", "name": "Erik Meijerink", "url": "https://erikmeijerink.nl"},
               "distribution": {"@type": "DataDownload", "encodingFormat": "application/json", "contentUrl": BASIS + "/data.json"}}
-schrijf("/", "Infectieziekten in Nederland – griep, covid en RSV nu",
-        f"Hoeveel griep, covid en RSV is er nu in Nederland? Wekelijkse cijfers van RIVM, Nivel en ECDC: positieve tests, rioolwater, huisartsbezoek en alle meldingsplichtige ziekten. Stand {wk_nl(STAND)}.",
+schrijf("/", "Griep en corona in Nederland nu – actuele cijfers",
+        f"Hoeveel griep en corona is er nu in Nederland? Griep: {f1(G['v'])}% positieve monsters bij de huisarts. Covid: rioolwater, tests en huisartscijfers. Plus RSV en alle meldingsplichtige ziekten. Stand {wk_nl(STAND)}.",
         inhoud_home, grafieken_home, "home", [dataset_ld])
 
 # ---- griep
