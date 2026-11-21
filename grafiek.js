@@ -98,9 +98,9 @@
         d += (d && !gat ? "L" : "M") + x(p[0]).toFixed(1) + "," + y(p[1]).toFixed(1);
         vorige = p[0];
       });
-      el("path", { d, fill: "none", stroke: s.kleur, "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+      el("path", { d, fill: "none", stroke: s.kleur, "stroke-width": s.dun ? 1 : 2.25, opacity: s.dun ? 0.35 : 1, "stroke-linejoin": "round" }, svg);
       const l = s.p[s.p.length - 1];
-      if (l) el("circle", { cx: x(l[0]), cy: y(l[1]), r: 3.5, fill: s.kleur }, svg);
+      if (l && !s.dun) el("circle", { cx: x(l[0]), cy: y(l[1]), r: 3.5, fill: s.kleur }, svg);
     });
     // tooltip
     const t = tip(box), gids = el("line", { y1: mt, y2: H - mb, class: "gids" }, svg);

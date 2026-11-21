@@ -271,6 +271,22 @@ R = {
 }
 
 
+def drie_weken(p):
+    """aandeel positief over de week zelf en de twee weken ervoor: alle positieve monsters / alle geteste monsters"""
+    uit = []
+    for d in sorted(sentinel):
+        weken = [sentinel.get(d - dt.timedelta(days=7 * i), {}) for i in range(3)]
+        if not all((p, "positivity") in w and (p, "tests") in w for w in weken):
+            continue
+        tests = sum(w[(p, "tests")] for w in weken)
+        if tests:
+            uit.append([d.isoformat(), round(sum(w[(p, "positivity")] * w[(p, "tests")] / 100 for w in weken) / tests * 100, 2)])
+    return uit
+
+
+R["griep_pos3"], R["covid_pos3"], R["rsv_pos3"] = drie_weken("Influenza"), drie_weken("SARS-CoV-2"), drie_weken("RSV")
+
+
 def stand(k):
     """laatste waarde, de waarde precies 7 dagen eerder en de datum"""
     r = R[k]
@@ -483,10 +499,11 @@ def grafiek(gid, titel, uitleg, bron_html, legenda=(), hoog=False):
 
 def lijn_cfg(series, fmt, vanaf=None, y0=True):
     out = []
-    for naam, k, kleur in series:
+    for item in series:
+        naam, k, kleur = item[:3]
         pts = [p for p in R[k] if not vanaf or p[0] >= vanaf]
-        out.append(dict(naam=naam, kleur=kleur, p=pts))
-    return dict(t="lijn", s=out, fmt=fmt, y0=y0, dag=all(k == "riool" for _, k, _ in series))
+        out.append(dict(naam=naam, kleur=kleur, p=pts, dun=len(item) > 3 and item[3] == "dun"))
+    return dict(t="lijn", s=out, fmt=fmt, y0=y0, dag=all(item[1] == "riool" for item in series))
 
 
 def seizoen_cfg(k, kleur, fmt, n=4):
@@ -620,7 +637,7 @@ def tegels_overig():
 grafieken_home = {
     "duo-griep": lijn_cfg([("Griep", "griep_lab", KLEUR["griep"])], "int", vanaf=EEN_JAAR),
     "duo-covid": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec", vanaf=EEN_JAAR),
-    "h-samen": lijn_cfg([("Griep", "griep_pos", KLEUR["griep"]), ("Covid", "covid_pos", KLEUR["covid"])], PCT, vanaf=TWEE_JAAR),
+    "h-samen": lijn_cfg([("Griep (3 weken)", "griep_pos3", KLEUR["griep"]), ("Covid (3 weken)", "covid_pos3", KLEUR["covid"])], PCT, vanaf=TWEE_JAAR),
     "h-covid-radar": lijn_cfg([("Positieve test", "radar_covid", KLEUR["covid"])], PCT, vanaf=TWEE_JAAR),
     "h-griep": seizoen_cfg("griep_pos", KLEUR["griep"], PCT),
     "h-covid": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec", vanaf=TWEE_JAAR),
@@ -633,6 +650,17 @@ grafieken_home["h-meld"] = dict(t="staaf", s=[dict(naam=z["kort"], a=z["jaren"][
 
 seizoen_leg = lambda kleur: [(f"Seizoen {SZ_NAAM(huidig_sz)}", kleur), ("Eerdere seizoenen", KLEUR["grijs"])]
 
+def drie_weken_zin(k, naam):
+    r = R[k + "_pos3"]
+    nu, d = r[-1][1], dt.date.fromisoformat(r[-1][0])
+    eerder = dict(r).get((d - dt.timedelta(days=21)).isoformat())
+    return f"<b>{f1(nu)}%</b> op {naam}" + (f" (drie weken eerder: {f1(eerder)}%)" if eerder is not None else "")
+
+
+samen_zin = (f"Gemiddeld over de drie weken tot en met {wk_nl(dt.date.fromisoformat(R['griep_pos3'][-1][0]))} testte "
+             f"{drie_weken_zin('griep', 'griep')} en {drie_weken_zin('covid', 'covid')} positief.")
+
+
 inhoud_home = f"""<header>
 <h1>Hoeveel griep en corona is er nu?</h1>
 <p class="lead">De actuele cijfers over griep en covid in Nederland, plus RSV, luchtwegklachten en alle meldingsplichtige infectieziekten. Elke week bijgewerkt met de officiële cijfers van het RIVM, Nivel en het Europese ECDC.</p>
@@ -641,8 +669,8 @@ inhoud_home = f"""<header>
 {duo_home()}
 <section id="samen">
 <h2><small>Griep en covid</small>Hoeveel luchtwegklachten komen door griep of covid?</h2>
-<p>Huisartsen in de peilstations testen elke week een deel van hun patiënten met luchtwegklachten op griep en op corona. {griep_zin} Covid: {f1(C['v'])}% in {wk_nl(C['d'])}.</p>
-{grafiek("h-samen", "Griep en covid bij de huisarts, laatste twee jaar", "Percentage positieve monsters per week bij de huisartsenpeilstations.", BRON_PEIL, [("Griep", KLEUR["griep"]), ("Covid", KLEUR["covid"])])}
+<p>Huisartsen in de peilstations testen elke week een deel van hun patiënten met luchtwegklachten op griep en op corona. {samen_zin}</p>
+{grafiek("h-samen", "Griep en covid bij de huisarts, laatste twee jaar", "Percentage positieve monsters bij de huisartsenpeilstations, gemiddeld over drie weken. Per week worden maar 30 tot 70 monsters getest; het gemiddelde haalt het toeval eruit.", BRON_PEIL, [("Griep", KLEUR["griep"]), ("Covid", KLEUR["covid"])])}
 </section>
 <section id="griep">
 <h2><small>Griep</small>Hoe verloopt dit griepseizoen?</h2>
@@ -697,7 +725,7 @@ inhoud = f"""<header><h1>Griep in Nederland: hoeveel griep is er nu?</h1>
 {tegel(f"Piek seizoen {SZ_NAAM(huidig_sz - 1)}", (f1(gp[0]) + "%") if gp else "–", ("in " + wk_nl(dt.date.fromisoformat(gp[1]))) if gp else "", "flat", kleur=KLEUR['grijs'])}
 </div>
 {grafiek("griep-seizoen", "Griep: dit seizoen naast eerdere seizoenen", "Percentage positieve monsters bij huisartsenpeilstations. Een griepseizoen loopt van week 40 tot week 39 van het jaar erna.", BRON_PEIL, seizoen_leg(KLEUR['griep']))}
-{grafiek("griep-pos", "Aandeel positieve griepmonsters sinds 2022", f"Per week testen huisartsen in de peilstations zo'n {f0(min(v for _, v in R['monsters'][-26:]))} tot {f0(max(v for _, v in R['monsters'][-26:]))} patiënten met luchtwegklachten. Bij zo weinig monsters schommelt het percentage van week tot week.", BRON_PEIL, [("Griep", KLEUR['griep'])])}
+{grafiek("griep-pos", "Aandeel positieve griepmonsters sinds 2022", f"Per week testen huisartsen in de peilstations zo'n {f0(min(v for _, v in R['monsters'][-26:]))} tot {f0(max(v for _, v in R['monsters'][-26:]))} patiënten met luchtwegklachten. Bij zo weinig monsters schommelt het percentage van week tot week.", BRON_PEIL, [("Gemiddelde over 3 weken", KLEUR['griep']), ("Per week (dun)", KLEUR['grijs'])])}
 {grafiek("griep-lab", "Positieve griepuitslagen uit laboratoria", "Aantal positieve testen op influenza per week, uit laboratoria buiten de peilstations.", BRON_LAB, [("Griep", KLEUR['griep'])])}
 {grafiek("griep-ili", "Huisartsbezoek voor griepachtige klachten", "Consulten voor een griepachtig ziektebeeld (plotseling koorts plus luchtwegklachten) per 100.000 inwoners per week. Nederland stopte met deze reeks na week 9 van 2026; de bredere reeks staat op de pagina luchtwegklachten.", BRON_HA, [("Griepachtig ziektebeeld", KLEUR['griep'])])}
 {tabel_laatste([("Positief (%)", "griep_pos", f1), ("Monsters", "monsters", f0), ("Lab-uitslagen", "griep_lab", f0)])}
@@ -707,7 +735,7 @@ inhoud = f"""<header><h1>Griep in Nederland: hoeveel griep is er nu?</h1>
 <li><a href="https://erviss.org">ECDC ERVISS</a> (griep in Europa per land)</li></ul></section>"""
 schrijf("/griep/", f"Griep in Nederland nu – cijfers {wk_nl(G['d'])}",
         f"Hoeveel griep is er nu? {f1(G['v'])}% van de monsters bij huisartsen testte in {wk_nl(G['d'])} positief op griep. Dit griepseizoen naast eerdere seizoenen, met laboratorium- en huisartscijfers.",
-        inhoud, {"griep-seizoen": seizoen_cfg("griep_pos", KLEUR["griep"], PCT, 5), "griep-pos": lijn_cfg([("Griep", "griep_pos", KLEUR["griep"])], PCT),
+        inhoud, {"griep-seizoen": seizoen_cfg("griep_pos", KLEUR["griep"], PCT, 5), "griep-pos": lijn_cfg([("Griep (3 weken)", "griep_pos3", KLEUR["griep"]), ("Griep per week", "griep_pos", KLEUR["griep"], "dun")], PCT),
                  "griep-lab": lijn_cfg([("Griep", "griep_lab", KLEUR["griep"])], "int"), "griep-ili": lijn_cfg([("Griepachtig ziektebeeld", "ili", KLEUR["griep"])], "dec")},
         "griep", kruimel=[("Griep", None)])
 
@@ -729,7 +757,7 @@ inhoud = f"""<header><h1>Corona in Nederland: hoeveel covid is er nu?</h1>
 </section>
 {grafiek("covid-riool-jaar", "Coronavirus in het rioolwater, laatste twee jaar", "Gemiddeld aantal virusdeeltjes per 100.000 inwoners, in biljoenen (10¹²), per dag zoals het RIVM het berekent. Sinds juli 2025 meet het RIVM één keer per week bij ongeveer 40% van de rioolwaterzuiveringen.", BRON_RIOOL, [("Rioolwater", KLEUR['covid'])])}
 {grafiek("covid-riool", "Coronavirus in het rioolwater sinds 2020", "Dezelfde reeks vanaf het begin van de metingen in september 2020.", BRON_RIOOL, [("Rioolwater", KLEUR['covid'])])}
-{grafiek("covid-pos", "Aandeel positieve coronamonsters bij huisartsen", "Percentage van de monsters uit de huisartsenpeilstations dat positief testte op SARS-CoV-2, per week.", BRON_PEIL, [("Covid", KLEUR['covid'])])}
+{grafiek("covid-pos", "Aandeel positieve coronamonsters bij huisartsen", "Percentage van de monsters uit de huisartsenpeilstations dat positief testte op SARS-CoV-2. De dikke lijn is het gemiddelde over drie weken, de dunne lijn het weekcijfer.", BRON_PEIL, [("Gemiddelde over 3 weken", KLEUR['covid']), ("Per week (dun)", KLEUR['grijs'])])}
 {grafiek("covid-radar", "Infectieradar: deelnemers met een positieve coronatest", "Percentage van alle deelnemers die die week een vragenlijst invulden, met een positieve zelftest of PCR-test.", BRON_RADAR_C, [("Positieve test", KLEUR['covid'])])}
 {grafiek("covid-lab", "Positieve coronatesten uit laboratoria", "Aantal positieve testen op SARS-CoV-2 per week, uit laboratoria buiten de peilstations. Sinds het einde van het testbeleid wordt veel minder getest; vergelijk vooral recente weken met elkaar.", BRON_LAB, [("Covid", KLEUR['covid'])])}
 {tabel_laatste([("Positief huisarts (%)", "covid_pos", f1), ("Infectieradar (%)", "radar_covid", f1), ("Lab-uitslagen", "covid_lab", f0)])}
@@ -742,7 +770,7 @@ schrijf("/covid/", f"Corona in Nederland nu – rioolwater en tests {wk_nl(C['d'
         f"Hoeveel corona is er nu? Rioolwater: {f0(RI['v'])} biljoen virusdeeltjes per 100.000 inwoners op {datum_nl(RI['d'])}. Plus positieve tests bij huisartsen, Infectieradar en laboratoria.",
         inhoud, {"covid-riool-jaar": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec", vanaf=TWEE_JAAR),
                  "covid-riool": lijn_cfg([("Rioolwater", "riool", KLEUR["covid"])], "dec"),
-                 "covid-pos": lijn_cfg([("Covid", "covid_pos", KLEUR["covid"])], PCT),
+                 "covid-pos": lijn_cfg([("Covid (3 weken)", "covid_pos3", KLEUR["covid"]), ("Covid per week", "covid_pos", KLEUR["covid"], "dun")], PCT),
                  "covid-radar": lijn_cfg([("Positieve test", "radar_covid", KLEUR["covid"])], PCT),
                  "covid-lab": lijn_cfg([("Covid", "covid_lab", KLEUR["covid"])], "int")},
         "covid", kruimel=[("Covid", None)])
@@ -758,7 +786,7 @@ inhoud = f"""<header><h1>RS-virus in Nederland: hoeveel RSV is er nu?</h1>
 {tegel(f"Piek seizoen {SZ_NAAM(huidig_sz - 1)}", (f1(rp[0]) + "%") if rp else "–", ("in " + wk_nl(dt.date.fromisoformat(rp[1]))) if rp else "", "flat", kleur=KLEUR['grijs'])}
 </div>
 {grafiek("rsv-seizoen", "RSV: dit seizoen naast eerdere seizoenen", "Percentage positieve monsters bij huisartsenpeilstations, van week 40 tot week 39.", BRON_PEIL, seizoen_leg(KLEUR['rsv']))}
-{grafiek("rsv-pos", "Aandeel positieve RSV-monsters sinds 2022", "Percentage positieve monsters bij huisartsenpeilstations per week.", BRON_PEIL, [("RSV", KLEUR['rsv'])])}
+{grafiek("rsv-pos", "Aandeel positieve RSV-monsters sinds 2022", "Percentage positieve monsters bij huisartsenpeilstations. De dikke lijn is het gemiddelde over drie weken, de dunne lijn het weekcijfer.", BRON_PEIL, [("Gemiddelde over 3 weken", KLEUR['rsv']), ("Per week (dun)", KLEUR['grijs'])])}
 {grafiek("rsv-lab", "Positieve RSV-uitslagen uit laboratoria", "Aantal positieve testen op RSV per week, uit laboratoria buiten de peilstations.", BRON_LAB, [("RSV", KLEUR['rsv'])])}
 {tabel_laatste([("Positief (%)", "rsv_pos", f1), ("Lab-uitslagen", "rsv_lab", f0)])}
 <section><h2>Meer weten over RSV</h2><ul>
@@ -766,7 +794,7 @@ inhoud = f"""<header><h1>RS-virus in Nederland: hoeveel RSV is er nu?</h1>
 <li><a href="https://www.rivm.nl/rs-virus/stand-van-zaken-rs-virus">RIVM: stand van zaken RS-virus</a></li></ul></section>"""
 schrijf("/rsv/", f"RS-virus (RSV) in Nederland nu – cijfers {wk_nl(RV['d'])}",
         f"Hoeveel RSV is er nu? {f1(RV['v'])}% van de monsters bij huisartsen testte in {wk_nl(RV['d'])} positief op het RS-virus. Dit seizoen naast eerdere seizoenen.",
-        inhoud, {"rsv-seizoen": seizoen_cfg("rsv_pos", KLEUR["rsv"], PCT, 5), "rsv-pos": lijn_cfg([("RSV", "rsv_pos", KLEUR["rsv"])], PCT),
+        inhoud, {"rsv-seizoen": seizoen_cfg("rsv_pos", KLEUR["rsv"], PCT, 5), "rsv-pos": lijn_cfg([("RSV (3 weken)", "rsv_pos3", KLEUR["rsv"]), ("RSV per week", "rsv_pos", KLEUR["rsv"], "dun")], PCT),
                  "rsv-lab": lijn_cfg([("RSV", "rsv_lab", KLEUR["rsv"])], "int")},
         "rsv", kruimel=[("RSV", None)])
 
