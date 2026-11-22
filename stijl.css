@@ -111,3 +111,20 @@ footer a{color:var(--ink2);border-bottom:1px solid var(--line);text-decoration:n
 td .chg.up{color:var(--up)} td .chg.down{color:var(--down)}
 .duo-kaart .minileg{display:flex;gap:12px;font-family:var(--mono);font-size:.72rem;color:var(--ink3);margin-top:8px}
 .duo-kaart .minileg span{display:flex;align-items:center;gap:5px}
+
+/* oordeel per ziekte */
+.fase{display:inline-block;font-family:var(--mono);font-size:.78rem;font-weight:500;letter-spacing:.02em;padding:2px 9px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--ink2);margin-right:6px;white-space:nowrap}
+.fase.up{background:var(--up);border-color:var(--up);color:#fff}
+.fase.down{background:var(--down);border-color:var(--down);color:#fff}
+.eens{font-size:.85rem;color:var(--ink3)}
+.duo-kaart .fasebox{margin:2px 0 4px}
+.kort{margin:18px 0 0}
+.kort h2{margin:0 0 8px}
+.fases{list-style:none;padding:0;margin:0 0 6px;display:grid;gap:6px}
+.fases li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin:0}
+.fases li > a{color:var(--ink);text-decoration:none;min-width:54px}
+.signalen ul{list-style:none;padding:0;margin:6px 0 10px}
+.signalen li{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px}
+.signalen h3{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.pijl{display:inline-block;width:1.2em;text-align:center;font-weight:700}
+.pijl.stijgt{color:var(--up)} .pijl.daalt{color:var(--down)} .pijl.gelijk{color:var(--ink3)}

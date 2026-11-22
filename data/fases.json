@@ -1,0 +1,223 @@
+{
+ "2026-W34": {
+  "griep": {
+   "fase": "Stabiel",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 1 omlaag)"
+  },
+  "covid": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (1 omhoog, 0 omlaag)"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W35": {
+  "griep": {
+   "fase": "Stijgend",
+   "cls": "up",
+   "eens": "2 van de 2 signalen stijgen"
+  },
+  "covid": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (1 omhoog, 1 omlaag)"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W36": {
+  "griep": {
+   "fase": "Stijgend",
+   "cls": "up",
+   "eens": "2 van de 2 signalen stijgen"
+  },
+  "covid": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (1 omhoog, 1 omlaag)"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W37": {
+  "griep": {
+   "fase": "Stabiel",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (1 omhoog, 0 omlaag)"
+  },
+  "covid": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (2 omhoog, 0 omlaag)"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W38": {
+  "griep": {
+   "fase": "Stabiel",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  },
+  "covid": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (1 omhoog, 0 omlaag)"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W39": {
+  "griep": {
+   "fase": "Stabiel",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 1 omlaag)"
+  },
+  "covid": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (1 omhoog, 0 omlaag)"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W40": {
+  "griep": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 1 omlaag)"
+  },
+  "covid": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (2 omhoog, 1 omlaag)"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W41": {
+  "griep": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 1 omlaag)"
+  },
+  "covid": {
+   "fase": "Stabiel",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (2 omhoog, 1 omlaag)"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W42": {
+  "griep": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 1 omlaag)"
+  },
+  "covid": {
+   "fase": "Begint op te lopen",
+   "cls": "up",
+   "eens": "3 van de 4 signalen stijgen"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W43": {
+  "griep": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  },
+  "covid": {
+   "fase": "Stijgend",
+   "cls": "up",
+   "eens": "4 van de 4 signalen stijgen"
+  },
+  "rsv": {
+   "fase": "Stabiel",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W44": {
+  "griep": {
+   "fase": "Stijgend",
+   "cls": "up",
+   "eens": "2 van de 2 signalen stijgen"
+  },
+  "covid": {
+   "fase": "Stijgend",
+   "cls": "up",
+   "eens": "4 van de 4 signalen stijgen"
+  },
+  "rsv": {
+   "fase": "Stabiel",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W45": {
+  "griep": {
+   "fase": "Stijgend",
+   "cls": "up",
+   "eens": "2 van de 2 signalen stijgen"
+  },
+  "covid": {
+   "fase": "Stijgend",
+   "cls": "up",
+   "eens": "4 van de 4 signalen stijgen"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 0 omlaag)"
+  }
+ },
+ "2026-W46": {
+  "griep": {
+   "fase": "Stijgend",
+   "cls": "up",
+   "eens": "2 van de 2 signalen stijgen"
+  },
+  "covid": {
+   "fase": "Hoog en stijgend",
+   "cls": "up",
+   "eens": "4 van de 4 signalen stijgen"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 1 omlaag)"
+  }
+ }
+}

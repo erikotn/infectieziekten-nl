@@ -459,6 +459,7 @@ def kop(titel, beschrijving, pad, og, ld_extra=()):
 <meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="alternate" type="application/rss+xml" title="{NAAM}: weekoverzicht" href="/feed.xml">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400..700;1,7..72,400..700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="/stijl.css">
@@ -574,11 +575,196 @@ def vorig_seizoen_zin(k, naam):
 
 
 # zinnen
-griep_zin = f"In {wk_nl(G['d'])} testte <b>{f1(G['v'])}%</b> van de monsters bij huisartsen positief op griep ({verschil_pp(G['v'], G['vorig'])})." + vorig_seizoen_zin("griep_pos", "griep")
-rsv_zin = f"In {wk_nl(RV['d'])} testte <b>{f1(RV['v'])}%</b> van de monsters positief op RSV ({verschil_pp(RV['v'], RV['vorig'])})." + vorig_seizoen_zin("rsv_pos", "RSV")
+def drie(k):
+    """laatste 3-weekgemiddelde en de waarde drie weken eerder"""
+    r = R[k + "_pos3"]
+    d = dt.date.fromisoformat(r[-1][0])
+    return r[-1][1], dict(r).get((d - dt.timedelta(days=21)).isoformat()), d
+
+
+def drie_zin(k, ziekte):
+    nu, toen, d = drie(k)
+    return (f"Gemiddeld over de drie weken tot en met {wk_nl(d)} testte <b>{f1(nu)}%</b> van de monsters bij huisartsen positief op {ziekte}"
+            + (f" (drie weken eerder: {f1(toen)}%)." if toen is not None else ".") + vorig_seizoen_zin(k + "_pos3", ziekte))
+
+
+griep_zin = drie_zin("griep", "griep")
+rsv_zin = drie_zin("rsv", "RSV")
 covid_zin = (f"Op {datum_nl(RI['d'])} zaten er gemiddeld <b>{f0(RI['v'])} biljoen</b> coronavirusdeeltjes in het rioolwater per 100.000 inwoners ({verschil_pct(RI['v'], RI['vorig']).replace('de week ervoor', 'een week eerder')}). "
-             f"Bij huisartsen testte in {wk_nl(C['d'])} {f1(C['v'])}% van de monsters positief op covid.")
+             f"Bij huisartsen testte gemiddeld over de laatste drie weken {f1(drie('covid')[0])}% van de monsters positief op covid.")
 radar_zin = f"In {wk_nl(RA['d'])} meldde <b>{f1(RA['v'])}%</b> van de deelnemers aan Infectieradar klachten van een luchtweginfectie ({verschil_pp(RA['v'], RA['vorig'])})."
+
+# ---------------------------------------------------------------- inzicht: fase, seizoenspositie, buurlanden, historie
+# Alles met vaste regels; de drempels staan ook op /over/.
+STIJG, DAAL = 1.15, 0.87          # verandering over drie weken: >15% erbij = stijgt, >13% eraf = daalt
+NIVEAU_GRENZEN = [(50, "laag"), (80, "gemiddeld"), (95, "hoog"), (101, "zeer hoog")]   # percentiel van de eigen historie
+
+
+def tot(k, cutoff):
+    return [p for p in R[k] if p[0] <= cutoff] if cutoff else R[k]
+
+
+def gem_venster(punten, eind, dagen):
+    """gemiddelde van de punten in (eind - dagen, eind]"""
+    e = dt.date.fromisoformat(eind)
+    v = [x for d, x in punten if 0 <= (e - dt.date.fromisoformat(d)).days < dagen]
+    return sum(v) / len(v) if v else None
+
+
+def signaal(naam, k, soort, cutoff=None):
+    """richting van één signaal over drie weken. soort: 'glad' (al een 3-weekgemiddelde), 'week' (3 weken tegen 3 weken), 'dag' (7 dagen tegen 7 dagen, 3 weken eerder)"""
+    p = tot(k, cutoff)
+    if len(p) < 8:
+        return None
+    eind = p[-1][0]
+    eerder = (dt.date.fromisoformat(eind) - dt.timedelta(days=21)).isoformat()
+    if soort == "glad":
+        nu, toen = p[-1][1], dict(p).get(eerder)
+    elif soort in ("week", "pctweek"):
+        nu, toen = gem_venster(p, eind, 21), gem_venster(p, eerder, 21)
+    else:
+        nu, toen = gem_venster(p, eind, 7), gem_venster(p, eerder, 7)
+    if nu is None or not toen:
+        return None
+    r = nu / toen
+    # kleine aantallen: een verschil moet ook in absolute zin iets voorstellen
+    min_abs = {"glad": 1.0, "week": 20, "pctweek": 0.1, "dag": 5}[soort]
+    beweegt = abs(nu - toen) >= min_abs
+    richting = ("stijgt" if r > STIJG else "daalt" if r < DAAL else "gelijk") if beweegt else "gelijk"
+    return dict(naam=naam, richting=richting, verandering=(r - 1) * 100, nu=nu, toen=toen, soort=soort)
+
+
+def niveau(k, cutoff=None, seizoensgebonden=False):
+    """seizoensgebonden (griep, RSV): huidige stand als deel van de gemiddelde piek van eerdere seizoenen.
+    anders (covid): percentiel van alle weken sinds het begin van de reeks."""
+    p = tot(k, cutoff)
+    nu = p[-1][1]
+    if seizoensgebonden:
+        sz_nu = seizoen_van(dt.date.fromisoformat(p[-1][0]))
+        pieken = defaultdict(float)
+        for d, v in p:
+            sz = seizoen_van(dt.date.fromisoformat(d))
+            if sz < sz_nu:
+                pieken[sz] = max(pieken[sz], v)
+        if pieken:
+            deel = 100 * nu / (sum(pieken.values()) / len(pieken))
+            return ("laag" if deel < 10 else "gemiddeld" if deel < 40 else "hoog" if deel < 80 else "zeer hoog"), deel
+    alle = sorted(v for _, v in p)
+    pct = 100 * sum(1 for v in alle if v < nu) / len(alle)
+    return next(n for g, n in NIVEAU_GRENZEN if pct < g), pct
+
+
+SIGNALEN = {
+    "griep": [("Labuitslagen", "griep_lab", "week"), ("Huisartsmonsters", "griep_pos3", "glad")],
+    "covid": [("Rioolwater", "riool", "dag"), ("Labuitslagen", "covid_lab", "week"), ("Huisartsmonsters", "covid_pos3", "glad"), ("Infectieradar-tests", "radar_covid", "pctweek")],
+    "rsv": [("Labuitslagen", "rsv_lab", "week"), ("Huisartsmonsters", "rsv_pos3", "glad")],
+}
+NIVEAU_REEKS = {"griep": "griep_pos3", "covid": "riool", "rsv": "rsv_pos3"}
+ZNAAM = {"griep": "Griep", "covid": "Covid", "rsv": "RSV"}
+
+
+def fase(ziekte, cutoff=None):
+    sig = [s for s in (signaal(n, k, soort, cutoff) for n, k, soort in SIGNALEN[ziekte]) if s]
+    if not sig:
+        return None
+    n, op, af = len(sig), sum(s["richting"] == "stijgt" for s in sig), sum(s["richting"] == "daalt" for s in sig)
+    niv, pct = niveau(NIVEAU_REEKS[ziekte], cutoff, seizoensgebonden=ziekte in ("griep", "rsv"))
+    if op > n / 2:
+        f, cls = ("Hoog en stijgend" if niv in ("hoog", "zeer hoog") else "Begint op te lopen" if niv == "laag" else "Stijgend"), "up"
+    elif af > n / 2:
+        f, cls = ("Laag en dalend" if niv == "laag" else "Dalend"), "down"
+    else:
+        f, cls = ("Hoog" if niv in ("hoog", "zeer hoog") else "Rustig" if niv == "laag" else "Stabiel"), "flat"
+    eens = f"{op} van de {n} signalen stijgen" if cls == "up" else f"{af} van de {n} signalen dalen" if cls == "down" else f"signalen wijzen niet één kant op ({op} omhoog, {af} omlaag)"
+    return dict(ziekte=ziekte, fase=f, cls=cls, eens=eens, niveau=niv, pct=pct, signalen=sig)
+
+
+def fase_pill(fz):
+    return f'<span class="fase {fz["cls"]}">{fz["fase"]}</span><span class="eens">{fz["eens"]}</span>' if fz else ""
+
+
+def waarde_tekst(s):
+    fm = {"glad": lambda v: f1(v) + "%", "pctweek": lambda v: f1(v) + "%", "week": lambda v: f0(v) + " per week", "dag": lambda v: f0(v) + " biljoen"}[s["soort"]]
+    return f"{fm(s['toen'])} → {fm(s['nu'])}"
+
+
+def signalen_blok(fz):
+    if not fz:
+        return ""
+    pijl = {"stijgt": "↑", "daalt": "↓", "gelijk": "→"}
+    rijen = "".join(f'<li><span class="pijl {s["richting"]}">{pijl[s["richting"]]}</span><b>{s["naam"]}</b> {s["richting"]} '
+                    f'<span class="meta">({waarde_tekst(s)})</span></li>' for s in fz["signalen"])
+    return f"""<div class="card signalen"><h3>{ZNAAM[fz['ziekte']]} nu: {fase_pill(fz)}</h3>
+<ul>{rijen}</ul>
+<p class="uitleg">Elk signaal vergelijkt de laatste drie weken met de drie weken daarvoor: meer dan 15% erbij telt als stijgen, meer dan 13% eraf als dalen, mits het verschil ook in absolute zin iets voorstelt. Het niveau ({fz['niveau']}) {"zet de huidige stand af tegen de gemiddelde piek van eerdere seizoenen" if fz['ziekte'] in ("griep", "rsv") else "vergelijkt de huidige stand met alle metingen sinds 2020"}. <a href="/over/#fase">Hoe het oordeel tot stand komt</a>.</p></div>"""
+
+
+# --- seizoenspositie (griep en RSV): beschrijft eerdere seizoenen, voorspelt niets
+def seizoen_positie(k):
+    per = defaultdict(list)
+    for d, v in R[k]:
+        dd = dt.date.fromisoformat(d)
+        per[seizoen_van(dd)].append((seizoen_index(dd), v))
+    nu_sz = max(per)
+    nu_idx, nu_v = per[nu_sz][-1]
+    vorige = [s for s in sorted(per) if s < nu_sz and len(per[s]) >= 45]
+    piek_nu = max(per[nu_sz], key=lambda p: p[1])
+    week_van = lambda sz, i: (dt.date.fromisocalendar(sz, 40, 1) + dt.timedelta(days=7 * i)).isocalendar()[1]
+    if piek_nu[1] >= 3 * max(nu_v, 0.1) and piek_nu[0] < nu_idx - 2:
+        return f"De piek van dit seizoen lag in week {week_van(nu_sz, piek_nu[0])} ({f1(piek_nu[1])}%). Sindsdien daalt het."
+    if nu_v < 2:   # seizoen nog niet begonnen: wanneer passeerden eerdere seizoenen de 2%?
+        starts = [next((i for i, v in per[s] if v >= 2), None) for s in vorige]
+        starts = [i for i in starts if i is not None]
+        if not starts:
+            return ""
+        return (f"Het seizoen is nog niet begonnen: het aandeel positieve monsters is {f1(nu_v)}%. In de vorige {len(vorige)} seizoenen kwam het gemiddeld "
+                f"rond week {week_van(nu_sz, round(sum(starts) / len(starts)))} boven de 2% (vroegst week {week_van(nu_sz, min(starts))}, laatst week {week_van(nu_sz, max(starts))}).")
+    bereikt = []
+    for s in vorige:
+        reeks = per[s]
+        piek = max(reeks, key=lambda p: p[1])
+        eerst = next((i for i, v in reeks if v >= nu_v and i <= piek[0]), None)
+        if eerst is not None:
+            bereikt.append((s, eerst, piek[0] - eerst, piek[1]))
+    if not vorige or not bereikt:
+        return ""
+    gem_week = sum(b[1] for b in bereikt) / len(bereikt)
+    verschil = round(gem_week - nu_idx)
+    wanneer = ("even vroeg als gemiddeld" if verschil == 0 else f"{abs(verschil)} {'week' if abs(verschil) == 1 else 'weken'} {'eerder' if verschil > 0 else 'later'} dan gemiddeld")
+    tot_piek = sorted(b[2] for b in bereikt)
+    pieken = sorted(b[3] for b in bereikt)
+    return (f"De vorige {len(vorige)} seizoenen ({', '.join(SZ_NAAM(s) for s in vorige)}) bereikten dit niveau ({f1(nu_v)}%) gemiddeld rond week {week_van(nu_sz, round(gem_week))}; "
+            f"dit seizoen is dat {wanneer}. Vanaf dit niveau duurde het toen nog {tot_piek[0]} tot {tot_piek[-1]} weken tot de piek, die lag tussen {f0(pieken[0])}% en {f0(pieken[-1])}%. "
+            f"Dat beschrijft eerdere seizoenen; een voorspelling voor dit seizoen is het niet.")
+
+
+# --- historie van het weekoordeel (voor de RSS-feed); staat in data/fases.json in de repo
+HIST_PAD = pathlib.Path("data/fases.json")
+historie = json.load(open(HIST_PAD)) if HIST_PAD.exists() else {}
+
+
+def week_sleutel(d):
+    y, w, _ = d.isocalendar()
+    return f"{y}-W{w:02d}"
+
+
+def week_oordeel(cutoff=None):
+    uit = {}
+    for z in ("griep", "covid", "rsv"):
+        fz = fase(z, cutoff)
+        if fz:
+            uit[z] = dict(fase=fz["fase"], cls=fz["cls"], eens=fz["eens"])
+    return uit
+
+
+laatste_week = max(dt.date.fromisoformat(R["griep_pos"][-1][0]), dt.date.fromisoformat(R["riool"][-1][0]) - dt.timedelta(days=dt.date.fromisoformat(R["riool"][-1][0]).weekday()))
+if not historie:   # eerste keer: twaalf weken terug invullen
+    for i in range(12, 0, -1):
+        d = laatste_week - dt.timedelta(days=7 * i)
+        historie[week_sleutel(d)] = week_oordeel((d + dt.timedelta(days=6)).isoformat())
+historie[week_sleutel(laatste_week)] = week_oordeel()
+FASES = {z: fase(z) for z in ("griep", "covid", "rsv")}
+
 
 def weken_op_rij(k):
     """hoeveel weken op rij de waarde steeg (+) of daalde (-), telkens vergeleken met 7 dagen eerder"""
@@ -625,9 +811,31 @@ def groei(k):
     return groot, " · ".join(delen), richting(s0["v"], s0["vorig"], (s0["vorig"] or 0) * .005)
 
 
+def weekoverzicht():
+    regels = []
+    for z in ("griep", "covid", "rsv"):
+        fz = FASES[z]
+        if not fz:
+            continue
+        hoofd = {"griep": "griep_lab", "covid": "riool", "rsv": "rsv_lab"}[z]
+        sig = next(x for x in fz["signalen"] if x["naam"] == {"griep_lab": "Labuitslagen", "riool": "Rioolwater", "rsv_lab": "Labuitslagen"}[hoofd])
+        regels.append(f'<li><a href="/{z}/"><b>{ZNAAM[z]}</b></a> {fase_pill(fz)}</li>')
+    vorige = sorted(historie)[-2] if len(historie) > 1 else None
+    nu_k = sorted(historie)[-1]
+    veranderd = [f"{ZNAAM[z]} van {historie[vorige][z]['fase'].lower()} naar {historie[nu_k][z]['fase'].lower()}"
+                 for z in ("griep", "covid", "rsv") if vorige and z in historie[vorige] and z in historie[nu_k] and historie[vorige][z]["fase"] != historie[nu_k][z]["fase"]]
+    wijziging = ("Veranderd sinds vorige week: " + "; ".join(veranderd) + ".") if veranderd else "Geen veranderingen ten opzichte van vorige week."
+    return f"""<section class="kort" id="deze-week" aria-label="Deze week in het kort">
+<h2><small>Deze week in het kort · {wk_nl(laatste_week)}</small>Hoe staat het ervoor?</h2>
+<ul class="fases">{"".join(regels)}</ul>
+<p class="meta">{wijziging} Het oordeel combineert alle signalen per ziekte met vaste regels: <a href="/over/#fase">zo werkt het</a> · <a href="/feed.xml">volg via RSS</a></p>
+</section>"""
+
+
 def duo_kaart(soort, titel, href, groot, eenheid, context, cls, oms, tweede, mini_id):
     return f"""<a class="duo-kaart" href="{href}" style="--k:{KLEUR[soort]}">
 <div class="t">{titel}</div>
+<div class="fasebox">{fase_pill(FASES[soort])}</div>
 <div class="g {cls}">{groot}<span class="e">{eenheid}</span></div>
 {f'<div class="groei">{context}</div>' if context else ''}
 <div class="oms">{oms}</div>
@@ -692,6 +900,7 @@ inhoud_home = f"""<header>
 <p class="lead">De actuele cijfers over griep en covid in Nederland, plus RSV, luchtwegklachten en alle meldingsplichtige infectieziekten. Elke week bijgewerkt met de officiële cijfers van het RIVM, Nivel en het Europese ECDC.</p>
 <p class="meta">Laatste cijfers: {wk_nl(STAND)} · bijgewerkt {datum_nl(VANDAAG)}</p>
 </header>
+{weekoverzicht()}
 {duo_home()}
 <section id="samen">
 <h2><small>Griep en covid</small>Hoeveel luchtwegklachten komen door griep of covid?</h2>
@@ -700,6 +909,7 @@ inhoud_home = f"""<header>
 </section>
 <section id="griep">
 <h2><small>Griep</small>Hoe verloopt dit griepseizoen?</h2>
+<p>{seizoen_positie("griep_pos3")}</p>
 {grafiek("h-griep", "Griep: dit seizoen naast eerdere seizoenen", "Percentage positieve monsters bij huisartsenpeilstations per week, van week 40 tot week 39.", BRON_PEIL, seizoen_leg(KLEUR["griep"]))}
 <p><a href="/griep/">Alle griepcijfers →</a></p>
 </section>
@@ -745,8 +955,10 @@ gp = seizoenpiek("griep_pos", huidig_sz - 1)
 inhoud = f"""<header><h1>Griep in Nederland: hoeveel griep is er nu?</h1>
 <p class="lead">{griep_zin}</p>
 <p class="meta">Laatste cijfers: {wk_nl(G['d'])}</p></header>
+{signalen_blok(FASES["griep"])}
+<p>{seizoen_positie("griep_pos3")}</p>
 <div class="tegels">
-{tegel("Positieve monsters", f1(G['v']) + "%", verschil_pp(G['v'], G['vorig']), richting(G['v'], G['vorig'], .05), kleur=KLEUR['griep'])}
+{tegel("Positieve monsters huisarts", f1(drie('griep')[0]) + "%", "gemiddeld over drie weken; drie weken eerder " + f1(drie('griep')[1]) + "%", richting(drie('griep')[0], drie('griep')[1], 1.0), kleur=KLEUR['griep'])}
 {tegel("Laboratoriumuitslagen", f0(stand('griep_lab')['v']), "positieve griepuitslagen in " + wk_nl(stand('griep_lab')['d']), "flat", kleur=KLEUR['griep'])}
 {tegel(f"Piek seizoen {SZ_NAAM(huidig_sz - 1)}", (f1(gp[0]) + "%") if gp else "–", ("in " + wk_nl(dt.date.fromisoformat(gp[1]))) if gp else "", "flat", kleur=KLEUR['grijs'])}
 </div>
@@ -770,9 +982,10 @@ CL = stand("covid_lab")
 inhoud = f"""<header><h1>Corona in Nederland: hoeveel covid is er nu?</h1>
 <p class="lead">{covid_zin}</p>
 <p class="meta">Laatste meting: {datum_nl(RI['d'])}</p></header>
+{signalen_blok(FASES["covid"])}
 <div class="tegels">
 {tegel("Rioolwater", f0(RI['v']), "biljoen deeltjes per 100.000 op " + datum_nl(RI['d']) + " · " + verschil_pct(RI['v'], RI['vorig']).replace("de week ervoor", "een week eerder"), richting(RI['v'], RI['vorig'], RI['vorig'] * .005 if RI['vorig'] else 0), kleur=KLEUR['covid'])}
-{tegel("Positieve monsters huisarts", f1(C['v']) + "%", verschil_pp(C['v'], C['vorig']), richting(C['v'], C['vorig'], .05), kleur=KLEUR['covid'])}
+{tegel("Positieve monsters huisarts", f1(drie('covid')[0]) + "%", "gemiddeld over drie weken; drie weken eerder " + f1(drie('covid')[1]) + "%", richting(drie('covid')[0], drie('covid')[1], 1.0), kleur=KLEUR['covid'])}
 {tegel("Positieve test Infectieradar", f1(RC['v']) + "%", "van de deelnemers · " + wk_nl(RC['d']), richting(RC['v'], RC['vorig'], .05), kleur=KLEUR['covid'])}
 {tegel("Laboratoriumuitslagen", f0(CL['v']), "positieve coronatesten in " + wk_nl(CL['d']), "flat", kleur=KLEUR['covid'])}
 </div>
@@ -806,8 +1019,10 @@ rp = seizoenpiek("rsv_pos", huidig_sz - 1)
 inhoud = f"""<header><h1>RS-virus in Nederland: hoeveel RSV is er nu?</h1>
 <p class="lead">{rsv_zin} RSV geeft vooral bij baby's en ouderen ernstige klachten.</p>
 <p class="meta">Laatste cijfers: {wk_nl(RV['d'])}</p></header>
+{signalen_blok(FASES["rsv"])}
+<p>{seizoen_positie("rsv_pos3")}</p>
 <div class="tegels">
-{tegel("Positieve monsters", f1(RV['v']) + "%", verschil_pp(RV['v'], RV['vorig']), richting(RV['v'], RV['vorig'], .05), kleur=KLEUR['rsv'])}
+{tegel("Positieve monsters huisarts", f1(drie('rsv')[0]) + "%", "gemiddeld over drie weken; drie weken eerder " + f1(drie('rsv')[1]) + "%", richting(drie('rsv')[0], drie('rsv')[1], 1.0), kleur=KLEUR['rsv'])}
 {tegel("Laboratoriumuitslagen", f0(stand('rsv_lab')['v']), "positieve RSV-uitslagen in " + wk_nl(stand('rsv_lab')['d']), "flat", kleur=KLEUR['rsv'])}
 {tegel(f"Piek seizoen {SZ_NAAM(huidig_sz - 1)}", (f1(rp[0]) + "%") if rp else "–", ("in " + wk_nl(dt.date.fromisoformat(rp[1]))) if rp else "", "flat", kleur=KLEUR['grijs'])}
 </div>
@@ -921,6 +1136,12 @@ inhoud = f"""<header><h1>Over deze site</h1>
 <li><b>Seizoenen:</b> een griep- of RSV-seizoen loopt van week 40 tot en met week 39 van het jaar erna.</li>
 <li><b>Rioolwater</b> zegt iets over de hoeveelheid virus in de bevolking, niet over hoeveel mensen ziek zijn. Sinds juli 2025 meet het RIVM één keer per week bij ongeveer 40% van de zuiveringen.</li>
 <li><b>Meldingen</b> tellen alleen gevallen die een arts of laboratorium vaststelde en meldde. Wie niet naar de dokter gaat, telt niet mee.</li></ul></section>
+<section id="fase"><h2>Hoe het oordeel per ziekte werkt</h2><ul>
+<li><b>Signalen.</b> Griep: labuitslagen en huisartsmonsters. Covid: rioolwater, labuitslagen, huisartsmonsters en positieve tests bij Infectieradar. RSV: labuitslagen en huisartsmonsters.</li>
+<li><b>Richting per signaal.</b> De laatste drie weken tegenover de drie weken daarvoor (bij rioolwater: de laatste zeven dagen tegenover zeven dagen, drie weken eerder). Meer dan 15% erbij is stijgen, meer dan 13% eraf is dalen. Het verschil moet ook in absolute zin iets voorstellen: minstens 1 procentpunt bij huisartsmonsters, 0,1 procentpunt bij Infectieradar, gemiddeld 20 uitslagen per week bij laboratoria en 5 biljoen deeltjes bij rioolwater. Anders telt het als gelijk.</li>
+<li><b>Niveau.</b> Griep en RSV: de huidige stand als deel van de gemiddelde piek van eerdere seizoenen (onder 10% laag, tot 40% gemiddeld, tot 80% hoog, daarboven zeer hoog). Covid heeft geen vast seizoen: daar telt hoe de rioolwaterstand zich verhoudt tot alle metingen sinds 2020 (onder de helft laag, tot 80% gemiddeld, tot 95% hoog, daarboven zeer hoog).</li>
+<li><b>Oordeel.</b> Stijgt meer dan de helft van de signalen, dan is het oordeel stijgend (bij een laag niveau: begint op te lopen, bij een hoog niveau: hoog en stijgend). Daalt meer dan de helft, dan dalend. Anders bepaalt het niveau het oordeel: rustig, stabiel of hoog.</li>
+<li><b>Seizoenspositie.</b> Voor griep en RSV staat erbij wanneer eerdere seizoenen hetzelfde niveau bereikten en hoe lang het toen nog tot de piek duurde. Dat beschrijft het verleden en is geen voorspelling.</li></ul></section>
 <section><h2>Bijwerken</h2>
 <p>Elke dag haalt een script de nieuwste bestanden op. De Europese cijfers komen meestal op vrijdag, de RIVM-cijfers op woensdag. Voor publicatie controleert het script of elke bron recent is, genoeg weken bevat en geen onmogelijke waarden heeft. Klopt iets niet, dan blijft de vorige versie online. Alle berekeningen zijn vaste regels, zonder AI. De verwerkte cijfers staan in <a href="/data.json">data.json</a>.</p></section>
 <section><h2>Geen medisch advies</h2><p>Deze site laat cijfers zien en geeft geen medisch advies. Heb je klachten, bel dan je huisarts. Kijk voor adviezen op de sites van het <a href="https://www.rivm.nl/">RIVM</a> en je GGD.</p></section>"""
@@ -936,6 +1157,27 @@ uitvoer = dict(bijgewerkt=VANDAAG.isoformat(), reeksen=R, meldingen=[dict(ziekte
 json.dump(uitvoer, open(SITE / "data.json", "w"), ensure_ascii=False, separators=(",", ":"))
 (SITE / "sitemap.xml").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
                                   "".join(f"  <url><loc>{BASIS}{x['pad']}</loc><lastmod>{VANDAAG.isoformat()}</lastmod></url>\n" for x in pagina_lijst) + "</urlset>\n")
+HIST_PAD.parent.mkdir(exist_ok=True)
+json.dump(dict(sorted(historie.items())), open(HIST_PAD, "w"), ensure_ascii=False, indent=1)
+items = []
+weken = sorted(historie)
+for i, wk in enumerate(reversed(weken[-26:])):
+    h = historie[wk]
+    vorig = historie.get(weken[weken.index(wk) - 1]) if weken.index(wk) > 0 else None
+    jaar, nr = wk.split("-W")
+    titel = f"Week {int(nr)} van {jaar}: " + ", ".join(f"{ZNAAM[z].lower() if z != 'rsv' else 'RSV'} {h[z]['fase'].lower()}" for z in ("griep", "covid", "rsv") if z in h)
+    titel = titel[0].upper() + titel[1:]
+    wijz = [f"{ZNAAM[z]}: van {vorig[z]['fase'].lower()} naar {h[z]['fase'].lower()}" for z in ("griep", "covid", "rsv") if vorig and z in vorig and z in h and vorig[z]["fase"] != h[z]["fase"]]
+    tekst = " ".join(f"{ZNAAM[z]}: {h[z]['fase'].lower()} ({h[z]['eens']})." for z in ("griep", "covid", "rsv") if z in h) + ((" Veranderd: " + "; ".join(wijz) + ".") if wijz else "")
+    datum = dt.date.fromisocalendar(int(jaar), int(nr), 7)
+    items.append(f"""<item><title>{html.escape(titel)}</title><link>{BASIS}/#deze-week</link><guid isPermaLink="false">{BASIS}/week/{wk}</guid>
+<pubDate>{datum.strftime('%a, %d %b %Y')} 12:00:00 +0000</pubDate><description>{html.escape(tekst)}</description></item>""")
+(SITE / "feed.xml").write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>{NAAM}: weekoverzicht</title><link>{BASIS}/</link>
+<description>Elke week het oordeel over griep, covid en RSV in Nederland, op basis van open data van RIVM, Nivel en ECDC.</description><language>nl</language>
+{"".join(items)}
+</channel></rss>
+""")
 (SITE / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {BASIS}/sitemap.xml\n")
 (SITE / "404.html").write_text(f'<!doctype html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pagina niet gevonden</title><link rel="stylesheet" href="/stijl.css"></head><body>{NAV}<main><h1>Pagina niet gevonden</h1><p><a href="/">Naar de voorpagina</a></p></main></body></html>')
 json.dump(pagina_lijst, open(SITE / "paginas.json", "w"))

@@ -58,6 +58,6 @@ jobs:
           cp site/stand.txt data/stand.txt
           git config user.name "infectieziekten-bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/stand.txt
+          git add data/stand.txt data/fases.json
           git commit -m "Nieuwe cijfers $(date -u +%F)" || exit 0
           git push
