@@ -11,6 +11,18 @@ HIST, GEMELD = pathlib.Path("data/fases.json"), pathlib.Path("data/gemeld.json")
 NAAM = {"griep": "Griep", "covid": "Covid", "rsv": "RSV"}
 PROEF = "--proef" in sys.argv
 
+def api(pad, data, token=None):
+    req = urllib.request.Request("https://bsky.social/xrpc/" + pad, data=json.dumps(data).encode(),
+                                 headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})})
+    return json.load(urllib.request.urlopen(req, timeout=30))
+
+
+handle, wachtwoord = os.environ.get("BSKY_HANDLE"), os.environ.get("BSKY_APP_PASSWORD")
+sessie = None
+if handle and wachtwoord and not PROEF:
+    sessie = api("com.atproto.server.createSession", {"identifier": handle, "password": wachtwoord})
+    print(f"inloggen als {handle} gelukt")
+
 historie = json.load(open(HIST))
 week = sorted(historie)[-1]
 nu = {z: v["fase"] for z, v in historie[week].items()}
@@ -35,23 +47,15 @@ if len(tekst) > 300:   # Bluesky-limiet; de link blijft altijd staan
     tekst = tekst[: 300 - len(link) - 3].rstrip() + "…\n\n" + link
 print(tekst)
 
-handle, wachtwoord = os.environ.get("BSKY_HANDLE"), os.environ.get("BSKY_APP_PASSWORD")
 if PROEF:
     print("proef: niet geplaatst, stand niet bijgewerkt")
     sys.exit(0)
-if not handle or not wachtwoord:
+if not sessie:
     json.dump({"week": week, "fases": nu}, open(GEMELD, "w"), ensure_ascii=False, indent=1)
     print("geen account gekoppeld: niet geplaatst, stand wel bijgewerkt")
     sys.exit(0)
 
 
-def api(pad, data, token=None):
-    req = urllib.request.Request("https://bsky.social/xrpc/" + pad, data=json.dumps(data).encode(),
-                                 headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})})
-    return json.load(urllib.request.urlopen(req, timeout=30))
-
-
-sessie = api("com.atproto.server.createSession", {"identifier": handle, "password": wachtwoord})
 b = tekst.encode("utf-8")
 start = b.rfind(link.encode("utf-8"))
 api("com.atproto.repo.createRecord", {
