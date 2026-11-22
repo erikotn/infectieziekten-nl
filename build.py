@@ -811,15 +811,46 @@ def groei(k):
     return groot, " · ".join(delen), richting(s0["v"], s0["vorig"], (s0["vorig"] or 0) * .005)
 
 
+KORT_SIG = {"Labuitslagen": "Lab", "Huisartsmonsters": "Huisarts", "Rioolwater": "Riool", "Infectieradar-tests": "Infectieradar"}
+
+
+def meter(fz):
+    """horizontale meter met vier zones en een streep op de huidige stand"""
+    if fz["ziekte"] in ("griep", "rsv"):
+        grenzen, maxv = [10, 40, 80], 120          # % van de gemiddelde seizoenspiek
+        uitleg = f"{f0(fz['pct'])}% van een gemiddelde seizoenspiek"
+    else:
+        grenzen, maxv = [50, 80, 95], 100          # percentiel van alle rioolwatermetingen
+        uitleg = f"hoger dan {f0(fz['pct'])}% van alle metingen sinds 2020"
+    randen = [0, *grenzen, maxv]
+    v = min(max(fz["pct"], 0), maxv)
+    i = next(j for j in range(4) if v < randen[j + 1] or j == 3)
+    pos = (i + (v - randen[i]) / (randen[i + 1] - randen[i])) * 25   # vier even brede zones; streep binnen de zone naar rato
+    zones = "".join(f'<span class="z z{j}"></span>' for j in range(4))
+    return f"""<div class="meter" role="img" aria-label="Niveau {fz['niveau']}: {uitleg}">
+<div class="balk">{zones}<span class="streep" style="left:{min(pos, 99):.1f}%"></span></div>
+<div class="schaal"><span>laag</span><span>gemiddeld</span><span>hoog</span><span>zeer hoog</span></div>
+</div>
+<div class="niv">Niveau: <b>{fz['niveau']}</b> · {uitleg}</div>"""
+
+
+def kort_kaart(z):
+    fz = FASES[z]
+    n = len(fz["signalen"])
+    op = sum(s["richting"] == "stijgt" for s in fz["signalen"])
+    af = sum(s["richting"] == "daalt" for s in fz["signalen"])
+    groot, onder = (f"{op}/{n}", "signalen stijgen") if fz["cls"] == "up" else (f"{af}/{n}", "signalen dalen") if fz["cls"] == "down" else (f"{n - op - af}/{n}", "signalen stabiel")
+    pijl = {"stijgt": "↑", "daalt": "↓", "gelijk": "→"}
+    chips = "".join(f'<span class="chip {s["richting"]}" title="{html.escape(s["naam"])}: {waarde_tekst(s)}">{pijl[s["richting"]]} {KORT_SIG[s["naam"]]}</span>' for s in fz["signalen"])
+    return f"""<a class="kort-kaart" href="/{z}/" style="--k:{KLEUR[z]}">
+<div class="kop"><span class="naam">{ZNAAM[z]}</span><span class="fase {fz['cls']}">{fz['fase']}</span></div>
+<div class="getal">{groot}<span>{onder}</span></div>
+{meter(fz)}
+<div class="chips">{chips}</div>
+</a>"""
+
+
 def weekoverzicht():
-    regels = []
-    for z in ("griep", "covid", "rsv"):
-        fz = FASES[z]
-        if not fz:
-            continue
-        hoofd = {"griep": "griep_lab", "covid": "riool", "rsv": "rsv_lab"}[z]
-        sig = next(x for x in fz["signalen"] if x["naam"] == {"griep_lab": "Labuitslagen", "riool": "Rioolwater", "rsv_lab": "Labuitslagen"}[hoofd])
-        regels.append(f'<li><a href="/{z}/"><b>{ZNAAM[z]}</b></a> {fase_pill(fz)}</li>')
     vorige = sorted(historie)[-2] if len(historie) > 1 else None
     nu_k = sorted(historie)[-1]
     veranderd = [f"{ZNAAM[z]} van {historie[vorige][z]['fase'].lower()} naar {historie[nu_k][z]['fase'].lower()}"
@@ -827,15 +858,14 @@ def weekoverzicht():
     wijziging = ("Veranderd sinds vorige week: " + "; ".join(veranderd) + ".") if veranderd else "Geen veranderingen ten opzichte van vorige week."
     return f"""<section class="kort" id="deze-week" aria-label="Deze week in het kort">
 <h2><small>Deze week in het kort · {wk_nl(laatste_week)}</small>Hoe staat het ervoor?</h2>
-<ul class="fases">{"".join(regels)}</ul>
-<p class="meta">{wijziging} Het oordeel combineert alle signalen per ziekte met vaste regels: <a href="/over/#fase">zo werkt het</a> · <a href="/feed.xml">volg via RSS</a></p>
+<div class="kort-grid">{"".join(kort_kaart(z) for z in ("griep", "covid", "rsv") if FASES[z])}</div>
+<p class="meta">{wijziging} Signalen: verandering over drie weken. <a href="/over/#fase">Zo werkt het oordeel</a> · <a href="/feed.xml">volg via RSS</a></p>
 </section>"""
 
 
 def duo_kaart(soort, titel, href, groot, eenheid, context, cls, oms, tweede, mini_id):
     return f"""<a class="duo-kaart" href="{href}" style="--k:{KLEUR[soort]}">
 <div class="t">{titel}</div>
-<div class="fasebox">{fase_pill(FASES[soort])}</div>
 <div class="g {cls}">{groot}<span class="e">{eenheid}</span></div>
 {f'<div class="groei">{context}</div>' if context else ''}
 <div class="oms">{oms}</div>
