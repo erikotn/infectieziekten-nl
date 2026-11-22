@@ -587,9 +587,9 @@ NAV = f"""<nav class="top"><div class="in"><a class="logo" href="/">{NAAM}</a>
 STAND = max(G["d"], RA["d"])
 
 
-# Op het eigen domein: bezoekers van pages.dev doorsturen naar dezelfde pagina op BASIS.
+# Op het eigen domein: bezoekers van pages.dev en www doorsturen naar dezelfde pagina op BASIS.
 DOORSTUUR = "" if BASIS.endswith(".pages.dev") else (
-    f'\n<script>if (location.hostname.endsWith(".pages.dev")) location.replace("{BASIS}" + location.pathname + location.search + location.hash);</script>')
+    f'\n<script>if (/(\\.pages\\.dev|^www\\.)/.test(location.hostname)) location.replace("{BASIS}" + location.pathname + location.search + location.hash);</script>')
 
 
 def kop(titel, beschrijving, pad, og, ld_extra=()):

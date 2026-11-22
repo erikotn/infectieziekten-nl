@@ -13,7 +13,7 @@ permissions:
 env:
   PROJECT: infectieziekten-nl
   SITE_URL: https://infectieziekten-nl.pages.dev
-  BASIS: https://infectieziekten-nl.pages.dev   # na het koppelen van het domein: hier het domein invullen
+  BASIS: https://infectiebron.nl
 
 jobs:
   bouw:
