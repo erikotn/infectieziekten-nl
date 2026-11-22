@@ -452,6 +452,7 @@ def kop(titel, beschrijving, pad, og, ld_extra=()):
     e = html.escape
     return f"""<title>{e(titel)}</title>
 <meta name="description" content="{e(beschrijving)}">
+<script>if (/(^|\.)(infectiebron\.nl|infectieziekten-nl\.pages\.dev)$/.test(location.hostname)) {{ const s = document.createElement("script"); s.defer = true; s.src = "https://static.cloudflareinsights.com/beacon.min.js"; s.dataset.cfBeacon = '{{"token": "5b281c2234df4b768c5f6aec5b0ac3f6"}}'; document.head.appendChild(s); }}</script>
 <link rel="canonical" href="{url}">
 <meta property="og:type" content="website"><meta property="og:locale" content="nl_NL"><meta property="og:site_name" content="{NAAM}">
 <meta property="og:title" content="{e(titel)}"><meta property="og:description" content="{e(beschrijving)}">
