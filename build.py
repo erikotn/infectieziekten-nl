@@ -459,6 +459,7 @@ def kop(titel, beschrijving, pad, og, ld_extra=()):
 <meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="alternate" type="application/rss+xml" title="{NAAM}: weekoverzicht" href="/feed.xml">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400..700;1,7..72,400..700&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -1181,7 +1182,8 @@ schrijf("/over/", "Over deze site – bronnen en werkwijze", "Waar de cijfers ov
 # ---- overige bestanden
 (SITE / "stijl.css").write_text(open("stijl.css").read())
 (SITE / "grafiek.js").write_text(open("grafiek.js").read())
-(SITE / "favicon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#1a2226"/><path d="M5 22 L11 14 L16 18 L21 8 L27 16" fill="none" stroke="#e9eeef" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+(SITE / "favicon.svg").write_text(open("logo.svg").read())
+(SITE / "apple-touch-icon.png").write_bytes(open("apple-touch-icon.png", "rb").read())
 uitvoer = dict(bijgewerkt=VANDAAG.isoformat(), reeksen=R, meldingen=[dict(ziekte=z["naam"], groep=z["groep"], let_op=z["noot"], jaren=z["jaren"]) for z in ziekten],
                bronnen={"ERVISS": "https://github.com/EU-ECDC/Respiratory_viruses_weekly_data", "RIVM open data": "https://data.rivm.nl/data/covid-19/", "RIVM meldingen": OVERZICHT})
 json.dump(uitvoer, open(SITE / "data.json", "w"), ensure_ascii=False, separators=(",", ":"))
