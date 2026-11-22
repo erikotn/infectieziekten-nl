@@ -437,6 +437,148 @@ def kaart_blok(gid):
 </figure>"""
 
 
+# ---------------------------------------------------------------- luchtweginfecties per GGD-regio (Nivel)
+def xlsx_blad(pad, blad):
+    """Leest één werkblad uit een .xlsx als lijst van rijen (alleen stdlib)."""
+    import zipfile, xml.etree.ElementTree as ET
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+          "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
+    z = zipfile.ZipFile(pad)
+    gedeeld = []
+    if "xl/sharedStrings.xml" in z.namelist():
+        for si in ET.fromstring(z.read("xl/sharedStrings.xml")).findall("m:si", ns):
+            gedeeld.append("".join(t.text or "" for t in si.iter("{%s}t" % ns["m"])))
+    wb = ET.fromstring(z.read("xl/workbook.xml"))
+    rid = next(sh.get("{%s}id" % ns["r"]) for sh in wb.find("m:sheets", ns) if sh.get("name") == blad)
+    rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+    doel = next(r.get("Target") for r in rels if r.get("Id") == rid).lstrip("/")
+    doel = doel if doel.startswith("xl/") else "xl/" + doel
+    rijen = []
+    for rij in ET.fromstring(z.read(doel)).iter("{%s}row" % ns["m"]):
+        cellen = {}
+        for c in rij.findall("m:c", ns):
+            kol = 0
+            for ch in re.match(r"[A-Z]+", c.get("r")).group():
+                kol = kol * 26 + ord(ch) - 64
+            v = c.find("m:v", ns)
+            if c.get("t") == "s" and v is not None:
+                w = gedeeld[int(v.text)]
+            elif c.get("t") == "inlineStr":
+                w = "".join(t.text or "" for t in c.iter("{%s}t" % ns["m"]))
+            elif v is not None:
+                w = float(v.text)
+            else:
+                w = None
+            cellen[kol - 1] = w
+        rijen.append([cellen.get(i) for i in range(max(cellen, default=-1) + 1)])
+    return rijen
+
+
+def nivel_per_ggd():
+    """{'weken': [46, 45, 44] (nieuwste eerst), 'jaar': 2026, 'ggd': {naam: [w46, w45, w44]}, 'praktijken': {naam: n}}"""
+    pad = BRON / "nivel_ggd.xlsx"
+    if not pad.exists():
+        return None
+    rijen = xlsx_blad(pad, "ARI")
+    kop = next(r for r in rijen if "week" in r)
+    kolommen = [(i, int(r)) for i, (w, r) in enumerate(zip(kop, kop[1:])) if w == "week"]
+    uit = {"weken": [w for _, w in kolommen], "ggd": {}}
+    for r in rijen:
+        if r and isinstance(r[0], str) and r[0] not in ("GGD",) and len(r) > kolommen[0][0] and (r[kolommen[0][0]] is None or isinstance(r[kolommen[0][0]], float)):
+            uit["ggd"][r[0].strip()] = [r[i] if i < len(r) else None for i, _ in kolommen]
+    pop = xlsx_blad(pad, "Populatie")
+    uit["praktijken"] = {r[0].strip(): int(r[2] or 0) for r in pop if r and isinstance(r[0], str) and len(r) > 2 and isinstance(r[2], float)}
+    m = re.search(r"(\d{4})", " ".join(str(c) for r in xlsx_blad(pad, "Voorblad") for c in r if c))
+    uit["jaar"] = int(m.group(1)) if m else dt.date.today().year
+    if "Nederland" not in uit["ggd"] or len(uit["ggd"]) < 20:
+        fout(f"Nivel-bestand per GGD: onverwachte opbouw ({len(uit['ggd'])} regio's)")
+    return uit
+
+
+NIV = nivel_per_ggd()
+GGD = json.load(open("ggd.json"))["regios"]
+ARI_KLASSEN = [(-15, "laag", "Lager dan landelijk (meer dan 15% minder)"), (15, "gelijk", "Rond het landelijk gemiddelde"),
+               (35, "hoger", "Hoger (15 tot 35% meer)"), (1e9, "hoogst", "Veel hoger (meer dan 35% meer)")]
+
+
+def ggd_kort(naam):
+    return re.sub(r"^GGD ", "", naam)
+
+
+def ari_gem(waarden):
+    w = [v for v in waarden if v is not None]
+    return sum(w) / len(w) if len(w) == len(waarden) else None
+
+
+if NIV:
+    ARI_NL = ari_gem(NIV["ggd"]["Nederland"])
+    ARI_REGIO = {}
+    for g in GGD:
+        k = ggd_kort(g["naam"])
+        rij = NIV["ggd"].get(k)
+        gem = ari_gem(rij) if rij else None
+        ARI_REGIO[g["naam"]] = {"kort": k, "gem": gem, "weken": rij or [None] * 3, "praktijken": NIV["praktijken"].get(k, 0),
+                               "afwijking": (gem / ARI_NL - 1) * 100 if gem is not None and ARI_NL else None}
+    onbekend = [k for k in NIV["ggd"] if k != "Nederland" and k not in {ggd_kort(g["naam"]) for g in GGD}]
+    if onbekend:
+        fout(f"Nivel-regio's zonder kaartvlak: {onbekend}")
+    ARI_WEKEN = f"week {NIV['weken'][-1]} t/m {NIV['weken'][0]}"
+
+
+def ari_klasse(a):
+    return "geen" if a is None else next(k for grens, k, _ in ARI_KLASSEN if a < grens)
+
+
+def ari_kaart_svg(breed=520):
+    lon0, lon1, lat0, lat1 = 3.3, 7.25, 50.72, 53.58
+    kx = 0.613
+    sc = breed / ((lon1 - lon0) * kx)
+    hoog = round((lat1 - lat0) * sc)
+    P = lambda lon, lat: ((lon - lon0) * kx * sc, (lat1 - lat) * sc)
+    paden = []
+    for g in GGD:
+        a = ARI_REGIO[g["naam"]]
+        d = "".join("M" + "L".join(f"{P(x, y)[0]:.1f},{P(x, y)[1]:.1f}" for x, y in poly) + "Z" for poly in g["polys"])
+        if a["gem"] is None:
+            t = f"{a['kort']}: geen cijfers (te weinig deelnemende huisartsen)"
+        else:
+            wk = ", ".join(f"week {w}: {f0(v)}" for w, v in zip(NIV["weken"], a["weken"]))
+            t = f"{a['kort']}: gemiddeld {f0(a['gem'])} per 100.000 ({'+' if a['afwijking'] >= 0 else '−'}{f0(abs(a['afwijking']))}% t.o.v. landelijk) · {wk} · {a['praktijken']} praktijken"
+        paden.append(f'<path d="{d}" class="ggd {ari_klasse(a["afwijking"])}"><title>{html.escape(t)}</title></path>')
+    return (f'<svg class="nlkaart" viewBox="0 0 {breed} {hoog}" role="img" aria-label="Kaart van Nederland met huisartsbezoek voor luchtweginfecties per GGD-regio, vergeleken met het landelijk gemiddelde">'
+            + "".join(paden) + "</svg>")
+
+
+BRON_NIVEL = ('<a href="https://www.nivel.nl/nl/zorg-en-ziekte-in-cijfers/actuele-cijfers-ziekten-per-week">Nivel Zorgregistraties Eerste Lijn</a>, cijfers per GGD-regio · grenzen: CBS/PDOK')
+
+
+def ari_kaart_blok(gid, titel="Luchtweginfecties per regio"):
+    if not NIV:
+        return ""
+    met = [a for a in ARI_REGIO.values() if a["gem"] is not None]
+    zonder = sorted(a["kort"] for a in ARI_REGIO.values() if a["gem"] is None)
+    hoogst = max(met, key=lambda a: a["gem"])
+    laagst = min(met, key=lambda a: a["gem"])
+    rijen = "".join(
+        f'<tr><td>{html.escape(a["kort"])}</td>' + "".join(f'<td class="num">{f0(v) if v is not None else "–"}</td>' for v in a["weken"])
+        + f'<td class="num">{a["praktijken"]}</td></tr>'
+        for a in sorted(ARI_REGIO.values(), key=lambda a: -(a["gem"] or -1)))
+    nl = NIV["ggd"]["Nederland"]
+    return f"""<figure class="card fig" id="{gid}">
+<h3>{titel}</h3>
+<p class="uitleg">Hoeveel mensen gingen per 100.000 inwoners naar de huisarts met een acute luchtweginfectie, gemiddeld over {ARI_WEKEN}? De kleur vergelijkt elke GGD-regio met het landelijk gemiddelde van {f0(ARI_NL)}. Het hoogst is {html.escape(hoogst["kort"])} ({f0(hoogst["gem"])}), het laagst {html.escape(laagst["kort"])} ({f0(laagst["gem"])}).</p>
+<p class="uitleg">Dit zijn alle luchtweginfecties samen: griep, covid, RSV en verkoudheid. Welk virus erachter zit, wordt alleen landelijk gemeten. Per regio doen soms maar een handvol huisartspraktijken mee, dus één week kan flink schommelen; daarom drie weken gemiddeld.{(" Geen cijfers voor " + " en ".join(zonder) + ": daar doen te weinig praktijken mee.") if zonder else ""}</p>
+<div class="legend">{"".join(f'<span><i class="vlak {k}"></i>{t}</span>' for _, k, t in ARI_KLASSEN)}<span><i class="vlak geen"></i>Geen cijfers</span></div>
+<div class="kaartbox">{ari_kaart_svg()}</div>
+<details class="onder"><summary>Per GGD-regio</summary><div class="scroll"><table>
+<thead><tr><th>GGD-regio</th>{"".join(f'<th class="num">Week {w}</th>' for w in NIV["weken"])}<th class="num">Praktijken</th></tr></thead><tbody>{rijen}
+<tr><td><b>Nederland</b></td>{"".join(f'<td class="num"><b>{f0(v)}</b></td>' for v in nl)}<td class="num">{NIV["praktijken"].get("Nederland", "")}</td></tr></tbody></table></div>
+<p class="uitleg">Huisartsbezoek voor een acute luchtweginfectie per 100.000 inwoners per week. Voorlopige cijfers; het Nivel herberekent ze na afloop van het jaar.</p></details>
+<figcaption class="meta">Bron: {BRON_NIVEL}</figcaption>
+</figure>"""
+
+
+
 # ---------------------------------------------------------------- HTML
 KLEUR = {"griep": "var(--griep)", "covid": "var(--covid)", "rsv": "var(--rsv)", "ari": "var(--ari)", "grijs": "var(--grijs)"}
 pagina_lijst = []
@@ -998,6 +1140,7 @@ inhoud = f"""<header><h1>Griep in Nederland: hoeveel griep is er nu?</h1>
 {grafiek("griep-pos", "Aandeel positieve griepmonsters sinds 2022", f"Per week testen huisartsen in de peilstations zo'n {f0(min(v for _, v in R['monsters'][-26:]))} tot {f0(max(v for _, v in R['monsters'][-26:]))} patiënten met luchtwegklachten. Bij zo weinig monsters schommelt het percentage van week tot week.", BRON_PEIL, [("Gemiddelde over 3 weken", KLEUR['griep']), ("Per week (dun)", KLEUR['grijs'])])}
 {grafiek("griep-lab", "Positieve griepuitslagen uit laboratoria", "Aantal positieve testen op influenza per week, uit laboratoria buiten de peilstations.", BRON_LAB, [("Griep", KLEUR['griep'])])}
 {grafiek("griep-ili", "Huisartsbezoek voor griepachtige klachten", "Consulten voor een griepachtig ziektebeeld (plotseling koorts plus luchtwegklachten) per 100.000 inwoners per week. Nederland stopte met deze reeks na week 9 van 2026; de bredere reeks staat op de pagina luchtwegklachten.", BRON_HA, [("Griepachtig ziektebeeld", KLEUR['griep'])])}
+{ari_kaart_blok("griep-kaart", "Griep per regio? Wel: luchtweginfecties per regio")}
 {tabel_laatste([("Positief (%)", "griep_pos", f1), ("Monsters", "monsters", f0), ("Lab-uitslagen", "griep_lab", f0)])}
 <section><h2>Meer weten over griep</h2><ul>
 <li><a href="https://www.rivm.nl/griep-griepprik">RIVM: griep en de griepprik</a></li>
@@ -1078,6 +1221,7 @@ inhoud = f"""<header><h1>Luchtwegklachten in Nederland: hoeveel mensen zijn verk
 {grafiek("lw-radar", "Zelf gemelde luchtwegklachten", "Percentage deelnemers aan Infectieradar met klachten van een acute luchtweginfectie, zoals hoesten, keelpijn of een loopneus, weekgemiddelde sinds november 2020.", BRON_RADAR, [("Infectieradar", KLEUR['ari'])])}
 {grafiek("lw-ari", "Huisartsbezoek voor luchtweginfecties per leeftijd", "Consulten voor een acute luchtweginfectie per 100.000 inwoners per week, sinds week 40 van 2025. Jonge kinderen gaan veel vaker naar de huisarts.", BRON_HA,
          [("0–4 jaar", "var(--covid)"), ("5–14 jaar", "var(--rsv)"), ("15–64 jaar", "var(--griep)"), ("65 jaar en ouder", "var(--ari)")])}
+{ari_kaart_blok("lw-kaart")}
 {tabel_laatste([("Infectieradar (%)", "radar", f1), ("Huisarts totaal", "ari", f0), ("0–4 jaar", "ari_0_4", f0), ("65+", "ari_65", f0)])}
 <section><h2>Meer weten</h2><ul>
 <li><a href="https://www.infectieradar.nl/">Infectieradar</a>: meld zelf elke week je klachten</li>
@@ -1158,6 +1302,7 @@ for z in ziekten:
 inhoud = f"""<header><h1>Over deze site</h1>
 <p class="lead">Waar de cijfers vandaan komen, wat ze wel en niet zeggen, en hoe vaak ze worden bijgewerkt.</p></header>
 <section><h2>Bronnen</h2><ul>
+<li><b>Luchtweginfecties per GGD-regio:</b> de wekelijkse regionale tabel van <a href="https://www.nivel.nl/nl/zorg-en-ziekte-in-cijfers/actuele-cijfers-ziekten-per-week">Nivel Zorgregistraties Eerste Lijn</a> (huisartsbezoek voor een acute luchtweginfectie per 100.000 inwoners). Grenzen van de GGD-regio's: CBS via PDOK.</li>
 <li><b>Huisartsenpeilstations, laboratoria en huisartsconsulten:</b> de Europese ademhalingsvirussurveillance <a href="https://erviss.org">ERVISS</a> van het <a href="https://www.ecdc.europa.eu/en/publications-data/european-respiratory-virus-surveillance-summary-erviss">ECDC</a>. Het RIVM en Nivel leveren daar elke week de Nederlandse cijfers aan. De bestanden staan op <a href="https://github.com/EU-ECDC/Respiratory_viruses_weekly_data">GitHub</a>.</li>
 <li><b>Infectieradar:</b> een wekelijkse vragenlijst van het RIVM waarin deelnemers hun klachten en testuitslagen melden. <a href="https://data.rivm.nl/data/covid-19/">RIVM open data</a>.</li>
 <li><b>Rioolwater:</b> het landelijk gemiddelde aantal coronavirusdeeltjes per 100.000 inwoners uit metingen bij rioolwaterzuiveringen. <a href="https://data.rivm.nl/data/covid-19/COVID-19_rioolwaterdata_landelijk.csv">RIVM open data</a>.</li>
@@ -1220,5 +1365,5 @@ for i, wk in enumerate(reversed(weken[-26:])):
 json.dump(pagina_lijst, open(SITE / "paginas.json", "w"))
 # vingerafdruk van de cijfers (zonder datum van vandaag), voor de workflow
 import hashlib
-(SITE / "stand.txt").write_text(hashlib.md5(json.dumps([R, [z["jaren"] for z in ziekten]], sort_keys=True).encode()).hexdigest())
+(SITE / "stand.txt").write_text(hashlib.md5(json.dumps([R, [z["jaren"] for z in ziekten], NIV], sort_keys=True).encode()).hexdigest())
 print(f"ok: {len(pagina_lijst)} pagina's · griep {wk_nl(G['d'])} {f1(G['v'])}% · rioolwater {wk_nl(RI['d'])} {f0(RI['v'])} · {len(ziekten)} meldingsplichtige ziekten t/m {JL}")
