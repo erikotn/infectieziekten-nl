@@ -1037,6 +1037,7 @@ def duo_home():
     c_tweede = f"Huisarts: <b>{f1(R['covid_pos3'][-1][1])}%</b> van de monsters positief op covid, gemiddeld over de laatste drie weken"
     # dezelfde teksten als platte tekst voor de wekelijkse Bluesky-post (meld.py)
     kaal = lambda s: re.sub(r"<[^>]+>", "", s)
+    SITE.mkdir(exist_ok=True)
     (SITE / "bluesky.json").write_text(json.dumps({
         "griep": {"groot": g_groot, "maat": "positieve labuitslagen", "context": g_ctx, "oms": kaal(g_oms), "tweede": kaal(huisarts)},
         "covid": {"groot": c_groot, "maat": "virus in het rioolwater", "context": c_ctx, "oms": kaal(c_oms), "tweede": kaal(c_tweede)},
