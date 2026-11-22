@@ -1183,6 +1183,9 @@ schrijf("/over/", "Over deze site – bronnen en werkwijze", "Waar de cijfers ov
 (SITE / "stijl.css").write_text(open("stijl.css").read())
 (SITE / "grafiek.js").write_text(open("grafiek.js").read())
 (SITE / "favicon.svg").write_text(open("logo.svg").read())
+# Bluesky-handle @infectiebron.nl: bewijs dat het domein bij dit account hoort (werkt zodra het domein naar de site wijst)
+(SITE / ".well-known").mkdir(exist_ok=True)
+(SITE / ".well-known" / "atproto-did").write_text("did:plc:6pbok5tfywzymbtbw4epiecg")
 (SITE / "apple-touch-icon.png").write_bytes(open("apple-touch-icon.png", "rb").read())
 uitvoer = dict(bijgewerkt=VANDAAG.isoformat(), reeksen=R, meldingen=[dict(ziekte=z["naam"], groep=z["groep"], let_op=z["noot"], jaren=z["jaren"]) for z in ziekten],
                bronnen={"ERVISS": "https://github.com/EU-ECDC/Respiratory_viruses_weekly_data", "RIVM open data": "https://data.rivm.nl/data/covid-19/", "RIVM meldingen": OVERZICHT})
