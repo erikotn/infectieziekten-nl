@@ -52,12 +52,20 @@ jobs:
           preCommands: npx wrangler pages project create ${{ env.PROJECT }} --production-branch=main || true
           command: pages deploy site --project-name=${{ env.PROJECT }} --branch=main
 
+      - name: Omslag melden op Bluesky
+        if: env.GEWIJZIGD == 'ja' || github.event_name == 'workflow_dispatch'
+        continue-on-error: true   # een mislukte melding mag de site niet tegenhouden
+        env:
+          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+          BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
+        run: python meld.py
+
       - name: Datastand opslaan in de repo
-        if: env.GEWIJZIGD == 'ja' && github.event_name == 'schedule'
+        if: env.GEWIJZIGD == 'ja' || github.event_name == 'workflow_dispatch'
         run: |
           cp site/stand.txt data/stand.txt
           git config user.name "infectieziekten-bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/stand.txt data/fases.json
+          git add data/stand.txt data/fases.json data/gemeld.json
           git commit -m "Nieuwe cijfers $(date -u +%F)" || exit 0
           git push
