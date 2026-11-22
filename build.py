@@ -587,13 +587,18 @@ NAV = f"""<nav class="top"><div class="in"><a class="logo" href="/">{NAAM}</a>
 STAND = max(G["d"], RA["d"])
 
 
+# Op het eigen domein: bezoekers van pages.dev doorsturen naar dezelfde pagina op BASIS.
+DOORSTUUR = "" if BASIS.endswith(".pages.dev") else (
+    f'\n<script>if (location.hostname.endsWith(".pages.dev")) location.replace("{BASIS}" + location.pathname + location.search + location.hash);</script>')
+
+
 def kop(titel, beschrijving, pad, og, ld_extra=()):
     url = BASIS + pad
     ld = [{"@context": "https://schema.org", "@type": "WebPage", "name": titel, "description": beschrijving, "url": url, "inLanguage": "nl",
            "dateModified": VANDAAG.isoformat(), "isPartOf": {"@type": "WebSite", "name": NAAM, "url": BASIS + "/"}}, *ld_extra]
     e = html.escape
     return f"""<title>{e(titel)}</title>
-<meta name="description" content="{e(beschrijving)}">
+<meta name="description" content="{e(beschrijving)}">{DOORSTUUR}
 <script>if (/(^|\\.)(infectiebron\\.nl|infectieziekten-nl\\.pages\\.dev)$/.test(location.hostname)) {{ const s = document.createElement("script"); s.defer = true; s.src = "https://static.cloudflareinsights.com/beacon.min.js"; s.dataset.cfBeacon = '{{"token": "5b281c2234df4b768c5f6aec5b0ac3f6"}}'; document.head.appendChild(s); }}</script>
 <link rel="canonical" href="{url}">
 <meta property="og:type" content="website"><meta property="og:locale" content="nl_NL"><meta property="og:site_name" content="{NAAM}">
