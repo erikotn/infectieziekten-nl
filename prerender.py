@@ -35,6 +35,12 @@ with sync_playwright() as p:
         }""")
         bestand = SITE / (pad.strip("/") + "/index.html" if pad != "/" else "index.html")
         bestand.write_text(html)
+    # griep- en covidkaart van de voorpagina als losse afbeeldingen voor de wekelijkse Bluesky-post
+    scherp = browser.new_page(viewport={"width": 1200, "height": 1600}, device_scale_factor=2, color_scheme="light")
+    scherp.goto(BASIS + "/", wait_until="networkidle")
+    scherp.wait_for_timeout(300)
+    for k, soort in zip(scherp.query_selector_all(".duo-kaart"), ("griep", "covid")):
+        k.screenshot(path=str(SITE / "og" / f"bsky-{soort}.png"))
     browser.close()
 server.shutdown()
 print(f"vooraf gerenderd: {len(json.load(open(SITE / 'paginas.json')))} pagina's, {len(gemaakt)} deelafbeeldingen")

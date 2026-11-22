@@ -1032,12 +1032,18 @@ def duo_home():
     g_groot, g_ctx, g_cls = groei("griep_lab")
     c_groot, c_ctx, c_cls = groei("riool")
     huisarts = f"Huisarts: <b>{f1(R['griep_pos3'][-1][1])}%</b> van de monsters positief op griep, gemiddeld over de laatste drie weken"
+    g_oms = f"Positieve griepuitslagen uit laboratoria: <b>{f0(GL['v'])}</b> in {wk_nl(GL['d'])}"
+    c_oms = f"Coronavirus in het rioolwater, gemeten op {datum_nl(RI['d'])}"
+    c_tweede = f"Huisarts: <b>{f1(R['covid_pos3'][-1][1])}%</b> van de monsters positief op covid, gemiddeld over de laatste drie weken"
+    # dezelfde teksten als platte tekst voor de wekelijkse Bluesky-post (meld.py)
+    kaal = lambda s: re.sub(r"<[^>]+>", "", s)
+    (SITE / "bluesky.json").write_text(json.dumps({
+        "griep": {"groot": g_groot, "maat": "positieve labuitslagen", "context": g_ctx, "oms": kaal(g_oms), "tweede": kaal(huisarts)},
+        "covid": {"groot": c_groot, "maat": "virus in het rioolwater", "context": c_ctx, "oms": kaal(c_oms), "tweede": kaal(c_tweede)},
+    }, ensure_ascii=False, indent=1))
     return '<div class="duo">' + duo_kaart(
-        "griep", "Griep", "/griep/", g_groot, " t.o.v. vorige week", g_ctx, g_cls,
-        f"Positieve griepuitslagen uit laboratoria: <b>{f0(GL['v'])}</b> in {wk_nl(GL['d'])}", huisarts, "duo-griep") + duo_kaart(
-        "covid", "Covid", "/covid/", c_groot, " t.o.v. vorige week", c_ctx, c_cls,
-        f"Coronavirus in het rioolwater, gemeten op {datum_nl(RI['d'])}",
-        f"Huisarts: <b>{f1(R['covid_pos3'][-1][1])}%</b> van de monsters positief op covid, gemiddeld over de laatste drie weken", "duo-covid") + "</div>"
+        "griep", "Griep", "/griep/", g_groot, " t.o.v. vorige week", g_ctx, g_cls, g_oms, huisarts, "duo-griep") + duo_kaart(
+        "covid", "Covid", "/covid/", c_groot, " t.o.v. vorige week", c_ctx, c_cls, c_oms, c_tweede, "duo-covid") + "</div>"
 
 
 def tegels_overig():
