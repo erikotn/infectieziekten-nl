@@ -1129,7 +1129,9 @@ dataset_ld = {"@context": "https://schema.org", "@type": "Dataset", "name": "Inf
               "description": "Wekelijkse cijfers over griep, covid, RSV en luchtwegklachten in Nederland, en jaartotalen van alle meldingsplichtige infectieziekten, samengesteld uit open data van ECDC en RIVM.",
               "url": BASIS + "/", "inLanguage": "nl", "dateModified": VANDAAG.isoformat(), "temporalCoverage": f"2016-01-01/{STAND.isoformat()}",
               "spatialCoverage": {"@type": "Place", "name": "Nederland"},
-              "isBasedOn": ["https://github.com/EU-ECDC/Respiratory_viruses_weekly_data", "https://data.rivm.nl/", OVERZICHT],
+              "isBasedOn": ["https://github.com/EU-ECDC/Respiratory_viruses_weekly_data", "https://data.rivm.nl/", OVERZICHT,
+                            "https://www.nivel.nl/nl/zorg-en-ziekte-in-cijfers/actuele-cijfers-ziekten-per-week"],
+              "license": "https://creativecommons.org/licenses/by/4.0/",
               "creator": {"@type": "Person", "name": "Erik Meijerink", "url": "https://erikmeijerink.nl"},
               "distribution": {"@type": "DataDownload", "encodingFormat": "application/json", "contentUrl": BASIS + "/data.json"}}
 schrijf("/", "Griep en corona in Nederland nu – actuele cijfers",
