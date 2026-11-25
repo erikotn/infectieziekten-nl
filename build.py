@@ -932,16 +932,20 @@ def weken_op_rij(k):
 
 
 def sinds(k):
-    """'hoogste sinds januari 2024' of 'laagste sinds ...', alleen als dat minstens 8 weken terug is"""
+    """'hoogste niveau sinds januari 2024' of 'laagste ...': de laatste keer dat het minstens zo hoog (laag) was,
+    buiten de lopende golf (de laatste 8 weken); alleen als dat minstens 8 weken terug is"""
     laatste_d, laatste_v = R[k][-1]
+    grens = dt.date.fromisoformat(laatste_d) - dt.timedelta(days=56)
     hoger = weken_op_rij(k) >= 0
     for d, v in reversed(R[k][:-1]):
+        dd = dt.date.fromisoformat(d)
         if (v >= laatste_v) if hoger else (v <= laatste_v):
-            dd = dt.date.fromisoformat(d)
-            if (dt.date.fromisoformat(laatste_d) - dd).days < 56:
-                return ""
-            return f"{'hoogste' if hoger else 'laagste'} sinds {MAAND[dd.month - 1]} {dd.year}"
-    return f"{'hoogste' if hoger else 'laagste'} sinds het begin van de metingen"
+            if dd > grens:
+                if hoger:
+                    continue      # piek van de lopende golf overslaan
+                return ""         # bij dalen: lager punt in de lopende golf, dan geen record noemen
+            return f"{'hoogste' if hoger else 'laagste'} niveau sinds {MAAND[dd.month - 1]} {dd.year}"
+    return f"{'hoogste' if hoger else 'laagste'} niveau sinds het begin van de metingen"
 
 
 def groei(k):
@@ -970,7 +974,7 @@ def meter(fz):
         uitleg = f"{f0(fz['pct'])}% van een gemiddelde seizoenspiek"
     else:
         grenzen, maxv = [50, 80, 95], 100          # percentiel van alle rioolwatermetingen
-        uitleg = f"hoger dan {f0(fz['pct'])}% van alle metingen sinds 2020"
+        uitleg = f"hoger dan {f0(fz['pct'])}% van alle metingen sinds september 2020, de coronagolven meegeteld"
     randen = [0, *grenzen, maxv]
     v = min(max(fz["pct"], 0), maxv)
     i = next(j for j in range(4) if v < randen[j + 1] or j == 3)
@@ -1039,8 +1043,8 @@ def duo_home():
     kaal = lambda s: re.sub(r"<[^>]+>", "", s)
     SITE.mkdir(exist_ok=True)
     (SITE / "bluesky.json").write_text(json.dumps({
-        "griep": {"groot": g_groot, "maat": "positieve labuitslagen", "context": g_ctx, "oms": kaal(g_oms), "tweede": kaal(huisarts)},
-        "covid": {"groot": c_groot, "maat": "virus in het rioolwater", "context": c_ctx, "oms": kaal(c_oms), "tweede": kaal(c_tweede)},
+        "griep": {"week": str(GL["d"]), "groot": g_groot, "maat": "positieve labuitslagen", "context": g_ctx, "oms": kaal(g_oms), "tweede": kaal(huisarts)},
+        "covid": {"week": str(RI["d"]), "groot": c_groot, "maat": "virus in het rioolwater", "context": c_ctx, "oms": kaal(c_oms), "tweede": kaal(c_tweede)},
     }, ensure_ascii=False, indent=1))
     return '<div class="duo">' + duo_kaart(
         "griep", "Griep", "/griep/", g_groot, " t.o.v. vorige week", g_ctx, g_cls, g_oms, huisarts, "duo-griep") + duo_kaart(

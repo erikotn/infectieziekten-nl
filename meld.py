@@ -1,6 +1,7 @@
 """Plaatst elke week één bericht op Bluesky: de griep- en covidkaart van de voorpagina als afbeeldingen, met toelichting.
 
-- Plaatst zodra er een nieuwe week in data/fases.json staat (vergeleken met data/gemeld.json). Eén post per week.
+- Plaatst zodra de griepcijfers van een nieuwe week er zijn (ECDC, meestal vrijdag; vergeleken met data/gemeld.json).
+  Dan zijn ook de rioolwatercijfers (RIVM, woensdag) van die week binnen, dus gaan griep en covid over dezelfde week. Eén post per week.
 - Is het oordeel voor griep, covid of RSV omgeslagen, dan staat dat bovenaan.
 - Teksten uit site/bluesky.json (build.py), afbeeldingen uit site/og/bsky-*.png (prerender.py); ontbreken die, dan alleen tekst.
 - Zonder BSKY_HANDLE en BSKY_APP_PASSWORD (of met --proef) plaatst het niets en toont het alleen de tekst.
@@ -24,16 +25,27 @@ historie = json.load(open(HIST))
 week = sorted(historie)[-1]
 nu = {z: v["fase"] for z, v in historie[week].items()}
 vorig = json.load(open(GEMELD)) if GEMELD.exists() else {"week": None, "fases": {}}
+kaart = json.load(open(KAART)) if KAART.exists() else {}
+gj, gw, _ = dt.date.fromisoformat(kaart["griep"]["week"]).isocalendar()
+griepweek = f"{gj}-W{gw:02d}"
 
-if vorig["week"] == week and not PROEF:
-    print(f"{week}: al gemeld, niets te doen")
+
+def bewaar():
+    json.dump({"week": week, "griepweek": griepweek, "fases": nu}, open(GEMELD, "w"), ensure_ascii=False, indent=1)
+
+
+if "griepweek" not in vorig and not PROEF:   # overgang van het oude schema: huidige griepweek geldt als gemeld
+    bewaar()
+    print(f"griepweek {griepweek} vastgelegd, niets geplaatst")
+    sys.exit(0)
+if vorig.get("griepweek") == griepweek and not PROEF:
+    print(f"griepweek {griepweek}: al gemeld, niets te doen")
     sys.exit(0)
 
 # ---- tekst
-jaar, nr = week.split("-W")
+nr = gw
 omslag = [f"{NAAM[z]} van {vorig['fases'].get(z, '?').lower()} naar {nu[z].lower()}."
           for z in ("griep", "covid", "rsv") if z in nu and vorig["fases"].get(z) and nu[z] != vorig["fases"][z]]
-kaart = json.load(open(KAART)) if KAART.exists() else {}
 blokken = [f"{NAAM[z]}: {k['groot']} {k['maat']} t.o.v. vorige week." + (f" {k['context'][0].upper()}{k['context'][1:].replace(' · ', ', ')}." if k["context"] else "")
            for z, k in kaart.items()]
 link = BASIS.replace("https://", "") + "/"
@@ -75,7 +87,7 @@ if PROEF:
 
 handle, wachtwoord = os.environ.get("BSKY_HANDLE"), os.environ.get("BSKY_APP_PASSWORD")
 if not (handle and wachtwoord):
-    json.dump({"week": week, "fases": nu}, open(GEMELD, "w"), ensure_ascii=False, indent=1)
+    bewaar()
     print("geen account gekoppeld: niet geplaatst, stand wel bijgewerkt")
     sys.exit(0)
 
@@ -92,5 +104,5 @@ if beelden:
         {"image": api("com.atproto.repo.uploadBlob", None, sessie["accessJwt"], ruw=data, soort="image/png")["blob"],
          "alt": alt[:2000], "aspectRatio": {"width": w, "height": h}} for data, alt, w, h in beelden]}
 api("com.atproto.repo.createRecord", {"repo": sessie["did"], "collection": "app.bsky.feed.post", "record": record}, sessie["accessJwt"])
-json.dump({"week": week, "fases": nu}, open(GEMELD, "w"), ensure_ascii=False, indent=1)
+bewaar()
 print("geplaatst op Bluesky")

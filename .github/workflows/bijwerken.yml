@@ -2,7 +2,7 @@ name: Bijwerken
 
 on:
   schedule:
-    - cron: "15 7,13,19 * * *"   # drie keer per dag; RIVM publiceert op woensdag, ECDC meestal op vrijdag
+    - cron: "37 * * * *"   # elk uur: GitHub slaat geplande runs vaak over; RIVM publiceert op woensdag, ECDC meestal op vrijdag. Live zetten alleen bij nieuwe cijfers.
   workflow_dispatch:
   push:
     branches: [main]
