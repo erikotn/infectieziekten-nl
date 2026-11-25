@@ -219,5 +219,22 @@
    "cls": "flat",
    "eens": "signalen wijzen niet één kant op (0 omhoog, 1 omlaag)"
   }
+ },
+ "2026-W47": {
+  "griep": {
+   "fase": "Stijgend",
+   "cls": "up",
+   "eens": "2 van de 2 signalen stijgen"
+  },
+  "covid": {
+   "fase": "Hoog en stijgend",
+   "cls": "up",
+   "eens": "4 van de 4 signalen stijgen"
+  },
+  "rsv": {
+   "fase": "Rustig",
+   "cls": "flat",
+   "eens": "signalen wijzen niet één kant op (0 omhoog, 1 omlaag)"
+  }
  }
 }
