@@ -1,8 +1,9 @@
 {
  "week": "2026-W47",
+ "griepweek": "2026-W47",
  "fases": {
   "griep": "Stijgend",
   "covid": "Hoog en stijgend",
-  "rsv": "Rustig"
+  "rsv": "Stabiel"
  }
 }
